@@ -5,23 +5,24 @@
   import { getItems, getImageUrl } from "$lib/jellyfinClient";
   import type { Item } from "$lib/types";
 
-  let items = $state<Item[]>([]);
+  let items = $state<Item[] | null>(null);
   let images = $state<Record<string, string>>({});
   let error = $state("");
-  let loading = $state(true);
 
   onMount(async () => {
     const libraryId = page.params.id!;
     try {
-      items = await getItems(libraryId);
+      const loaded = await getItems(libraryId);
+      items = loaded;
+      // Render the grid as soon as the item list itself is known -- images
+      // fill in individually right after, rather than gating the whole
+      // grid behind every single poster finishing.
       const entries = await Promise.all(
-        items.map(async (item) => [item.Id, await getImageUrl(item.Id)] as const),
+        loaded.map(async (item) => [item.Id, await getImageUrl(item.Id)] as const),
       );
       images = Object.fromEntries(entries);
     } catch (e) {
       error = typeof e === "string" ? e : "Failed to load items";
-    } finally {
-      loading = false;
     }
   });
 </script>
@@ -31,17 +32,27 @@
 <main>
   <a class="back" href="/library">&larr; Libraries</a>
 
-  {#if loading}
-    <p class="dim">Loading&hellip;</p>
-  {:else if error}
+  {#if error}
     <p class="error">{error}</p>
+  {:else if items === null}
+    <div class="grid">
+      {#each Array(18) as _}
+        <div class="poster">
+          <div class="skeleton poster-thumb"></div>
+        </div>
+      {/each}
+    </div>
   {:else if items.length === 0}
     <p class="dim">This library is empty.</p>
   {:else}
     <div class="grid">
       {#each items as item (item.Id)}
         <a class="poster" href={`/item/${item.Id}`}>
-          <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+          {#if images[item.Id]}
+            <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+          {:else}
+            <div class="skeleton poster-thumb"></div>
+          {/if}
           <span class="title">{item.Name}</span>
           {#if item.ProductionYear}
             <span class="year">{item.ProductionYear}</span>
@@ -77,7 +88,8 @@
     color: var(--text);
   }
 
-  .poster img {
+  .poster img,
+  .poster-thumb {
     width: 100%;
     aspect-ratio: 2 / 3;
     object-fit: cover;

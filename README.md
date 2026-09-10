@@ -1,6 +1,13 @@
-# Saucefin
+# FastFin
 
-A Windows desktop Jellyfin client. Tauri (Rust) + SvelteKit frontend, video playback rendered through an embedded real `mpv` process (not a browser `<video>` tag) for proper HDR/codec support — the same reason Jellyfin's own official desktop client uses mpv/libmpv.
+A fast, lightweight Windows desktop Jellyfin client. Tauri (Rust) + SvelteKit frontend, video playback rendered through an embedded real `mpv` process (not a browser `<video>` tag) for proper HDR/codec support — the same reason Jellyfin's own official desktop client uses mpv/libmpv.
+
+## Why it's light
+
+- **No bundled browser engine.** Tauri renders the UI through the OS's own WebView2 runtime instead of shipping a full Chromium copy with the app (the way Electron-based clients do) — a much smaller install and lower idle memory footprint for the UI layer.
+- **Video never touches a browser media pipeline.** Playback is a real, separate `mpv` process with hardware-accelerated decode, driven over a native window handle and a JSON IPC pipe — not a browser `<video>` tag. That sidesteps the decode/tone-mapping overhead and HDR quality loss common in web-based Jellyfin clients, and gets mpv's own broad, efficient codec support for free.
+- **The window chrome is native, not re-rendered video.** The always-on-top HUD (playback controls, track pickers) is a second, tiny transparent overlay window layered above the video surface at the OS compositor level — the video frame itself is never redrawn or scaled to make room for controls.
+- **Picture-in-Picture is a real floating OS window, not a second player.** Entering PiP just detaches and shrinks the existing native video window and lays a small overlay on top of it; there's no second decode pipeline or duplicated webview involved.
 
 ## Setup
 

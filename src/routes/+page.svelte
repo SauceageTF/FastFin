@@ -12,7 +12,7 @@
 </script>
 
 <main class="splash">
-  <p>Loading Saucefin&hellip;</p>
+  <p>Loading FastFin&hellip;</p>
 </main>
 
 <style>

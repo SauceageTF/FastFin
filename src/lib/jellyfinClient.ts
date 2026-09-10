@@ -1,16 +1,38 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Library, Item } from "./types";
+import type { Library, Item, Track } from "./types";
+
+interface SessionInfo {
+  serverUrl: string;
+  accessToken: string;
+}
+
+// getImageUrl/getBackdropUrl are called for every poster on screen -- a page
+// like the home page easily has 80+ of them. Each used to be its own IPC
+// round-trip to Rust just to format a string with zero actual async work
+// behind it. Fetching the session info once (memoized -- concurrent callers
+// share the same in-flight request) and building URLs locally afterward
+// removes that per-image overhead entirely. Cleared on login/logout so a
+// session change can't leave a stale server/token cached.
+let sessionInfoPromise: Promise<SessionInfo> | null = null;
+
+function sessionInfo(): Promise<SessionInfo> {
+  if (!sessionInfoPromise) sessionInfoPromise = invoke("get_session_info");
+  return sessionInfoPromise;
+}
 
 export async function login(serverUrl: string, username: string, password: string): Promise<void> {
   await invoke("login", { serverUrl, username, password });
+  sessionInfoPromise = null;
 }
 
 export async function tryRestoreSession(): Promise<boolean> {
+  sessionInfoPromise = null;
   return invoke("try_restore_session");
 }
 
 export async function logout(): Promise<void> {
   await invoke("logout");
+  sessionInfoPromise = null;
 }
 
 export async function getLibraries(): Promise<Library[]> {
@@ -19,6 +41,10 @@ export async function getLibraries(): Promise<Library[]> {
 
 export async function getItems(libraryId: string): Promise<Item[]> {
   return invoke("get_items", { libraryId });
+}
+
+export async function getLatestItems(libraryId: string): Promise<Item[]> {
+  return invoke("get_latest_items", { libraryId });
 }
 
 export async function getItem(itemId: string): Promise<Item> {
@@ -33,8 +59,24 @@ export async function getResume(): Promise<Item[]> {
   return invoke("get_resume");
 }
 
-export async function getBackdropUrl(itemId: string): Promise<string> {
-  return invoke("get_backdrop_url", { itemId });
+export async function getBackdropUrl(itemId: string, maxWidth = 1920): Promise<string> {
+  const { serverUrl, accessToken } = await sessionInfo();
+  // Backdrop images are a per-item array in Jellyfin (unlike Primary), so
+  // the image index must be explicit -- omitting it 404s rather than
+  // defaulting. maxWidth asks Jellyfin to serve (and cache) a resized copy
+  // rather than the original -- these are frequently several MB at full
+  // resolution for no visible benefit at the size this actually renders at,
+  // so this cuts both transfer time and the decoded bitmap's footprint in
+  // the webview's memory.
+  return `${serverUrl}/Items/${itemId}/Images/Backdrop/0?api_key=${accessToken}&maxWidth=${maxWidth}`;
+}
+
+// Only call this once you know the item actually has a Logo image (check
+// `hasLogo()` from `./types` first) -- most items don't have one, and
+// requesting it anyway would just 404.
+export async function getLogoUrl(itemId: string, maxWidth = 800): Promise<string> {
+  const { serverUrl, accessToken } = await sessionInfo();
+  return `${serverUrl}/Items/${itemId}/Images/Logo?api_key=${accessToken}&maxWidth=${maxWidth}`;
 }
 
 export async function getSeasons(seriesId: string): Promise<Item[]> {
@@ -45,32 +87,48 @@ export async function getEpisodes(seriesId: string, seasonId: string): Promise<I
   return invoke("get_episodes", { seriesId, seasonId });
 }
 
-export async function getImageUrl(itemId: string): Promise<string> {
-  return invoke("get_image_url", { itemId });
+export async function getImageUrl(itemId: string, maxWidth = 480): Promise<string> {
+  const { serverUrl, accessToken } = await sessionInfo();
+  // Poster cards render at 160-340px in CSS; 480 covers that comfortably
+  // even at 2x DPR without asking the server for a multi-MB original. See
+  // getBackdropUrl's comment -- same reasoning, smaller default because
+  // posters render much smaller than the hero backdrop does.
+  return `${serverUrl}/Items/${itemId}/Images/Primary?api_key=${accessToken}&maxWidth=${maxWidth}`;
 }
 
-export async function startPlayback(
-  itemId: string,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  startSeconds: number,
-): Promise<void> {
-  await invoke("start_playback", { itemId, x, y, width, height, startSeconds });
+export async function getSimilarItems(itemId: string): Promise<Item[]> {
+  return invoke("get_similar_items", { itemId });
 }
 
-export async function resizeVideoSurface(
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-): Promise<void> {
-  await invoke("resize_video_surface", { x, y, width, height });
+export async function startPlayback(itemId: string, startSeconds: number): Promise<void> {
+  await invoke("start_playback", { itemId, startSeconds });
 }
 
 export async function stopPlayback(): Promise<void> {
   await invoke("stop_playback");
+}
+
+export async function goBackToItem(itemId: string): Promise<void> {
+  await invoke("go_back_to_item", { itemId });
+}
+
+export async function toggleMainFullscreen(): Promise<boolean> {
+  return invoke("toggle_main_fullscreen");
+}
+
+// Floats the video as a small always-on-top corner window and minimizes the
+// main window to get it out of the way. There's no matching `exitPip` --
+// restoring the main window (taskbar, Alt+Tab, ...) is the only way out, and
+// the Rust side handles that itself from the window's focus event.
+export async function enterPip(): Promise<void> {
+  await invoke("enter_pip");
+}
+
+// The PiP overlay's own "return to FastFin" control. Just restores focus to
+// the main window -- the Rust side tears PiP down itself in reaction to that
+// focus change, the same as if the user had clicked the taskbar icon.
+export async function restoreFromPip(): Promise<void> {
+  await invoke("restore_from_pip");
 }
 
 export async function mpvSetPause(paused: boolean): Promise<void> {
@@ -83,4 +141,16 @@ export async function mpvSeek(seconds: number): Promise<void> {
 
 export async function mpvSetVolume(volume: number): Promise<void> {
   await invoke("mpv_set_volume", { volume });
+}
+
+export async function getTracks(): Promise<Track[]> {
+  return invoke("get_tracks");
+}
+
+export async function mpvSetSubtitleTrack(trackId: number | null): Promise<void> {
+  await invoke("mpv_set_subtitle_track", { trackId });
+}
+
+export async function mpvSetAudioTrack(trackId: number): Promise<void> {
+  await invoke("mpv_set_audio_track", { trackId });
 }

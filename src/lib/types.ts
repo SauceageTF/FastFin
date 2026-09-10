@@ -18,9 +18,21 @@ export interface Item {
   RunTimeTicks: number | null;
   IndexNumber: number | null;
   SeriesName: string | null;
+  SeriesId: string | null;
+  SeasonId: string | null;
   UserData: UserData | null;
   BackdropImageTags: string[] | null;
   ParentBackdropItemId: string | null;
+  Genres: string[] | null;
+  CommunityRating: number | null;
+  OfficialRating: string | null;
+  Taglines: string[] | null;
+  ImageTags: Record<string, string> | null;
+}
+
+/** Whether Jellyfin has a Logo (wordmark) image for this item. */
+export function hasLogo(item: Item): boolean {
+  return !!item.ImageTags?.Logo;
 }
 
 /** Picks the item to actually source a backdrop image from: an item's own
@@ -30,4 +42,12 @@ export interface Item {
 export function backdropSourceId(item: Item): string | null {
   if (item.BackdropImageTags && item.BackdropImageTags.length > 0) return item.Id;
   return item.ParentBackdropItemId;
+}
+
+export interface Track {
+  id: number;
+  type: string;
+  lang: string | null;
+  title: string | null;
+  selected: boolean;
 }

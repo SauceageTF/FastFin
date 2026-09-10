@@ -39,3 +39,22 @@ input {
 a {
   color: var(--accent);
 }
+
+/* Shared shimmer placeholder for content that's still loading -- used
+   instead of "Loading..." text so navigating between pages shows an
+   immediate, plausible shape of the page rather than a blank/text flash. */
+.skeleton {
+  background: linear-gradient(100deg, var(--bg-elevated) 40%, var(--bg-hover) 50%, var(--bg-elevated) 60%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}

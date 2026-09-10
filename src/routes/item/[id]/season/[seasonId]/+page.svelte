@@ -5,10 +5,9 @@
   import { getEpisodes, getImageUrl } from "$lib/jellyfinClient";
   import type { Item } from "$lib/types";
 
-  let episodes = $state<Item[]>([]);
+  let episodes = $state<Item[] | null>(null);
   let images = $state<Record<string, string>>({});
   let error = $state("");
-  let loading = $state(true);
 
   function formatRuntime(ticks: number | null): string {
     if (!ticks) return "";
@@ -20,15 +19,14 @@
     const seriesId = page.params.id!;
     const seasonId = page.params.seasonId!;
     try {
-      episodes = await getEpisodes(seriesId, seasonId);
+      const loaded = await getEpisodes(seriesId, seasonId);
+      episodes = loaded;
       const entries = await Promise.all(
-        episodes.map(async (ep) => [ep.Id, await getImageUrl(ep.Id)] as const),
+        loaded.map(async (ep) => [ep.Id, await getImageUrl(ep.Id)] as const),
       );
       images = Object.fromEntries(entries);
     } catch (e) {
       error = typeof e === "string" ? e : "Failed to load episodes";
-    } finally {
-      loading = false;
     }
   });
 </script>
@@ -38,17 +36,31 @@
 <main>
   <a class="back" href={`/item/${page.params.id}`}>&larr; Back</a>
 
-  {#if loading}
-    <p class="dim">Loading&hellip;</p>
-  {:else if error}
+  {#if error}
     <p class="error">{error}</p>
+  {:else if episodes === null}
+    <div class="list">
+      {#each Array(6) as _}
+        <div class="row">
+          <div class="skeleton row-thumb"></div>
+          <div class="row-info">
+            <div class="skeleton skel-line skel-title"></div>
+            <div class="skeleton skel-line skel-overview"></div>
+          </div>
+        </div>
+      {/each}
+    </div>
   {:else if episodes.length === 0}
     <p class="dim">No episodes found.</p>
   {:else}
     <div class="list">
       {#each episodes as ep (ep.Id)}
         <a class="row" href={`/player/${ep.Id}`}>
-          <img src={images[ep.Id]} alt={ep.Name} loading="lazy" />
+          {#if images[ep.Id]}
+            <img src={images[ep.Id]} alt={ep.Name} loading="lazy" />
+          {:else}
+            <div class="skeleton row-thumb"></div>
+          {/if}
           <div class="row-info">
             <span class="title">
               {#if ep.IndexNumber}<span class="num">{ep.IndexNumber}.</span>{/if}
@@ -97,12 +109,26 @@
     background: var(--bg-hover);
   }
 
-  .row img {
+  .row img,
+  .row-thumb {
     width: 160px;
     aspect-ratio: 16 / 9;
     object-fit: cover;
     border-radius: 6px;
     flex-shrink: 0;
+  }
+
+  .skel-line {
+    height: 1em;
+  }
+
+  .skel-title {
+    width: 50%;
+    height: 1.1em;
+  }
+
+  .skel-overview {
+    width: 90%;
   }
 
   .row-info {

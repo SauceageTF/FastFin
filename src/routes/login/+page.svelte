@@ -32,7 +32,7 @@
       <line x1="4" y1="12" x2="20" y2="12"></line>
       <line x1="4" y1="18" x2="20" y2="18"></line>
     </svg>
-    <h1>Saucefin</h1>
+    <h1>FastFin</h1>
     <p class="subtitle">Connect to your Jellyfin server</p>
 
     <label>

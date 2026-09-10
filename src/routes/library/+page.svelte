@@ -2,18 +2,26 @@
   import { onMount } from "svelte";
   import Header from "$lib/Header.svelte";
   import Carousel from "$lib/Carousel.svelte";
-  import { getLibraries, getItems, getResume, getImageUrl, getBackdropUrl } from "$lib/jellyfinClient";
-  import { backdropSourceId, type Library, type Item } from "$lib/types";
+  import { getLibraries, getLatestItems, getResume, getImageUrl, getBackdropUrl, getLogoUrl } from "$lib/jellyfinClient";
+  import { backdropSourceId, hasLogo, type Library, type Item } from "$lib/types";
 
-  type Row = { library: Library; items: Item[] };
+  // `items: null` means that row hasn't resolved yet (shown as a skeleton);
+  // `[]` means it resolved but the library is empty (hidden entirely). Rows
+  // are seeded in their final order up front and each fills in independently
+  // as its own request finishes, instead of the whole page waiting on
+  // whichever library happens to be slowest -- that "everything shows up at
+  // once, whenever the last thing finishes" gate was the main thing making
+  // the page feel like it was doing nothing for a noticeable stretch.
+  type RowState = { library: Library; items: Item[] | null };
 
-  let continueWatching = $state<Item[]>([]);
-  let rows = $state<Row[]>([]);
+  let continueWatching = $state<Item[] | null>(null);
+  let rows = $state<RowState[]>([]);
   let images = $state<Record<string, string>>({});
   let featured = $state<Item | null>(null);
+  let featuredReady = $state(false);
   let featuredBackdrop = $state("");
+  let featuredLogo = $state("");
   let error = $state("");
-  let loading = $state(true);
 
   function formatRuntime(ticks: number | null): string {
     if (!ticks) return "";
@@ -23,35 +31,121 @@
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   }
 
+  // getImageUrl/getBackdropUrl resolve almost instantly now (the session
+  // info they need is cached after the first call -- see jellyfinClient.ts),
+  // so awaiting *them* doesn't actually wait for the picture itself to
+  // arrive over the network, just for its URL to be known. Actually
+  // prioritizing the hero means waiting for its image to finish downloading
+  // and decoding before anything else even starts requesting -- otherwise
+  // the hero's (larger) backdrop and the row's (smaller) poster thumbnails
+  // end up racing for bandwidth, and the smaller ones reliably win, which is
+  // exactly the "row appears before the hero" effect this is fixing.
+  function preloadImage(url: string): Promise<void> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve();
+      img.onerror = () => resolve();
+      img.src = url;
+      // Don't let a stalled/unreachable image hold up the rest of the page
+      // forever.
+      setTimeout(resolve, 4000);
+    });
+  }
+
+  async function loadImagesFor(items: Item[]) {
+    const entries = await Promise.all(
+      items.map(async (item) => [item.Id, await getImageUrl(item.Id)] as const),
+    );
+    await Promise.all(entries.map(([, url]) => preloadImage(url)));
+    images = { ...images, ...Object.fromEntries(entries) };
+  }
+
+  async function fetchRowItems(index: number): Promise<Item[]> {
+    const library = rows[index].library;
+    try {
+      const items = await getLatestItems(library.Id);
+      rows[index] = { library, items };
+      return items;
+    } catch {
+      rows[index] = { library, items: [] };
+      return [];
+    }
+  }
+
+  async function loadRow(index: number) {
+    const items = await fetchRowItems(index);
+    if (items.length > 0) await loadImagesFor(items);
+  }
+
+  async function setFeatured(item: Item | null) {
+    featured = item;
+    featuredLogo = "";
+    if (!item) {
+      featuredReady = true;
+      return;
+    }
+    const backdropId = backdropSourceId(item);
+    const tasks: Promise<void>[] = [];
+    if (backdropId) {
+      tasks.push(
+        getBackdropUrl(backdropId)
+          .catch(() => "")
+          .then(async (url) => {
+            if (url) await preloadImage(url);
+            featuredBackdrop = url;
+          }),
+      );
+    }
+    // The logo (wordmark) is a small transparent PNG, not the multi-hundred-
+    // KB backdrop, so loading it alongside rather than after doesn't
+    // meaningfully compete for bandwidth the way a second large image would.
+    if (hasLogo(item)) {
+      tasks.push(
+        getLogoUrl(item.Id)
+          .catch(() => "")
+          .then(async (url) => {
+            if (url) await preloadImage(url);
+            featuredLogo = url;
+          }),
+      );
+    }
+    await Promise.all(tasks);
+    featuredReady = true;
+  }
+
   onMount(async () => {
     try {
-      const [libraries, resumeItems] = await Promise.all([getLibraries(), getResume().catch(() => [])]);
-      continueWatching = resumeItems;
+      const [libraries, resumeItems] = await Promise.all([
+        getLibraries(),
+        getResume().catch(() => [] as Item[]),
+      ]);
 
-      rows = await Promise.all(
-        libraries.map(async (library) => {
-          const items = await getItems(library.Id);
-          return { library, items: items.slice(0, 15) };
-        }),
-      );
+      rows = libraries.map((library) => ({ library, items: null }));
 
-      featured = continueWatching[0] ?? rows.find((r) => r.items.length > 0)?.items[0] ?? null;
-      if (featured) {
-        const backdropId = backdropSourceId(featured);
-        if (backdropId) {
-          featuredBackdrop = await getBackdropUrl(backdropId);
+      // The hero takes strict top priority, then the first row -- each
+      // fully finishes (image bytes and all, not just the URL) before the
+      // next thing even starts requesting, all the way down to every other
+      // row only being fetched once both of those are completely done.
+      if (resumeItems.length > 0) {
+        continueWatching = resumeItems;
+        await setFeatured(resumeItems[0]);
+        await loadImagesFor(resumeItems);
+      } else {
+        continueWatching = [];
+        if (rows.length > 0) {
+          const items = await fetchRowItems(0);
+          await setFeatured(items[0] ?? null);
+          if (items.length > 0) await loadImagesFor(items);
+        } else {
+          await setFeatured(null);
         }
       }
 
-      const allItems = [...continueWatching, ...rows.flatMap((r) => r.items)];
-      const entries = await Promise.all(
-        allItems.map(async (item) => [item.Id, await getImageUrl(item.Id)] as const),
-      );
-      images = Object.fromEntries(entries);
+      rows.forEach((row, i) => {
+        if (row.items === null) loadRow(i);
+      });
     } catch (e) {
       error = typeof e === "string" ? e : "Failed to load your library";
-    } finally {
-      loading = false;
     }
   });
 </script>
@@ -59,12 +153,14 @@
 <Header />
 
 <main>
-  {#if loading}
-    <p class="dim center">Loading&hellip;</p>
-  {:else if error}
+  {#if error}
     <p class="error center">{error}</p>
   {:else}
-    {#if featured}
+    {#if !featuredReady}
+      <section class="hero skeleton-hero">
+        <div class="skeleton hero-fill"></div>
+      </section>
+    {:else if featured}
       <section class="hero">
         {#if featuredBackdrop}
           <img src={featuredBackdrop} alt="" class="hero-image" />
@@ -72,7 +168,11 @@
         <div class="hero-scrim"></div>
         <div class="hero-scrim-side"></div>
         <div class="hero-content">
-          <h1>{featured.Name}</h1>
+          {#if featuredLogo}
+            <img class="hero-logo" src={featuredLogo} alt={featured.Name} />
+          {:else}
+            <h1>{featured.Name}</h1>
+          {/if}
           <p class="hero-meta">
             {#if featured.SeriesName}<span>{featured.SeriesName}</span>{/if}
             {#if featured.ProductionYear}<span>{featured.ProductionYear}</span>{/if}
@@ -94,14 +194,25 @@
     {/if}
 
     <div class="rows">
-      {#if continueWatching.length > 0}
+      {#if continueWatching === null}
+        <section class="row">
+          <div class="skeleton skeleton-title"></div>
+          <div class="skeleton-cards">
+            {#each Array(6) as _}
+              <div class="skeleton wide-thumb"></div>
+            {/each}
+          </div>
+        </section>
+      {:else if continueWatching.length > 0}
         <section class="row">
           <h2>Continue Watching</h2>
           <Carousel>
             {#each continueWatching as item (item.Id)}
               <a class="wide-card" href={`/player/${item.Id}`}>
                 <div class="wide-thumb">
-                  <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                  {#if images[item.Id]}
+                    <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                  {/if}
                   {#if item.UserData?.PlayedPercentage}
                     <div class="progress-track">
                       <div class="progress-fill" style={`width:${item.UserData.PlayedPercentage}%`}></div>
@@ -119,16 +230,29 @@
       {/if}
 
       {#each rows as row (row.library.Id)}
-        {#if row.items.length > 0}
+        {#if row.items === null}
+          <section class="row">
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton-cards">
+              {#each Array(6) as _}
+                <div class="skeleton poster-thumb"></div>
+              {/each}
+            </div>
+          </section>
+        {:else if row.items.length > 0}
           <section class="row">
             <div class="row-header">
-              <h2>{row.library.Name}</h2>
+              <h2>Recently Added in {row.library.Name}</h2>
               <a class="see-all" href={`/library/${row.library.Id}`}>See all</a>
             </div>
             <Carousel>
               {#each row.items as item (item.Id)}
                 <a class="poster-card" href={`/item/${item.Id}`}>
-                  <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                  {#if images[item.Id]}
+                    <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                  {:else}
+                    <div class="skeleton poster-thumb"></div>
+                  {/if}
                   <span class="card-title">{item.Name}</span>
                 </a>
               {/each}
@@ -156,6 +280,17 @@
     height: 82vh;
     min-height: 560px;
     overflow: hidden;
+  }
+
+  .skeleton-hero {
+    padding: 0 40px;
+    box-sizing: border-box;
+  }
+
+  .hero-fill {
+    position: absolute;
+    inset: 0;
+    border-radius: 0;
   }
 
   .hero-image {
@@ -197,6 +332,17 @@
     font-size: 64px;
     line-height: 1.02;
     margin: 0 0 20px;
+  }
+
+  .hero-logo {
+    display: block;
+    max-width: 360px;
+    max-height: 140px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    margin: 0 0 20px;
+    filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.5));
   }
 
   .hero-meta {
@@ -265,6 +411,18 @@
     margin: 0 0 14px;
   }
 
+  .skeleton-title {
+    width: 220px;
+    height: 18px;
+    margin-bottom: 14px;
+  }
+
+  .skeleton-cards {
+    display: flex;
+    gap: 12px;
+    overflow: hidden;
+  }
+
   .see-all {
     font-size: 13px;
     color: var(--text-dim);
@@ -285,7 +443,8 @@
     color: var(--text);
   }
 
-  .poster-card img {
+  .poster-card img,
+  .poster-thumb {
     width: 230px;
     aspect-ratio: 2 / 3;
     object-fit: cover;

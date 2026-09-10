@@ -8,7 +8,7 @@ const THEMES: Record<ThemeColor, { accent: string; accentHover: string }> = {
   ember: { accent: "#ff5a1f", accentHover: "#ff7a3d" },
 };
 
-const STORAGE_KEY = "saucefin-theme-color";
+const STORAGE_KEY = "fastfin-theme-color";
 
 function loadInitial(): ThemeColor {
   try {

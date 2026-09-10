@@ -1,7 +1,7 @@
 {
-  "name": "saucefin",
-  "version": "0.1.0",
-  "description": "",
+  "name": "fastfin",
+  "version": "0.2.0",
+  "description": "A fast, lightweight Jellyfin desktop client",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
