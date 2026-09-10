@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-09-10
+
+### Fixed
+
+- Closing the app while a video was playing left `mpv.exe` running and the HUD overlay stuck on screen — nothing tore playback down when the main window closed. Closing now runs the same cleanup as the in-app "back"/"stop" actions: mpv is sent a `quit` command and killed, and both the video host window and HUD window are destroyed.
+
+### Changed
+
+- Reduced mpv's memory footprint: the demuxer's network cache is capped much lower (from 150MB/50MB down to 32MB/8MB — Jellyfin is typically LAN/local and doesn't need that much slack), software decode thread count is capped instead of scaling with CPU core count, and mpv no longer reads any system-wide config/scripts, so behavior stays fully pinned to what this app passes it. Hardware decoding was deliberately left off so mpv doesn't compete for GPU/VRAM with other GPU-heavy use (e.g. gaming) on the same machine.
+
 ## [0.2.0] - 2026-09-10
 
 ### Renamed
