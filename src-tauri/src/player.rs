@@ -368,11 +368,54 @@ pub fn spawn_mpv(
         "--no-input-default-bindings".to_string(),
         "--no-osc".to_string(),
         "--keep-open=yes".to_string(),
+        // Ignores any mpv.conf/input.conf/scripts sitting in mpv's normal
+        // config locations (e.g. %APPDATA%\mpv). This sidecar's behavior
+        // should be fully pinned to the flags passed here -- without this, a
+        // stray system-wide mpv config (a common thing for anyone who's ever
+        // installed mpv standalone, e.g. a uosc/thumbfast setup) could
+        // silently override the cache/thread limits below or load scripts
+        // that add their own memory overhead (thumbnail caches in
+        // particular can be large), defeating the whole point of tuning
+        // this budget explicitly.
+        "--no-config".to_string(),
         // Query the actual display's current colorspace/HDR state (via DXGI)
         // and match the swapchain to it, instead of always presenting SDR and
         // tone-mapping HDR content down -- this is the entire reason mpv is
         // used here instead of a browser <video> tag, so it must be explicit.
         "--target-colorspace-hint=yes".to_string(),
+        // Deliberately NOT --hwdec: this app is meant to run alongside a game
+        // on the same GPU, and even mpv's "copy back to system RAM" hwdec
+        // modes still allocate a pool of GPU decode surfaces for the
+        // duration of playback, which is exactly the VRAM contention we want
+        // to avoid here. Software decoding is the tradeoff that keeps this
+        // entirely off the GPU.
+        //
+        // The two flags below trim the two parts of mpv's RAM use that are
+        // *not* inherent to that tradeoff:
+        //
+        // - mpv defaults to a 150MiB-forward/50MiB-back network demuxer
+        //   cache regardless of resolution. Jellyfin is typically LAN/local,
+        //   which doesn't need that much slack to ride out network hiccups.
+        //   A real test run at these limits still held ~195s of forward
+        //   buffer in just 64MB (i.e. a typical stream's bitrate leaves
+        //   these limits nowhere near full) -- so both are cut further here.
+        "--demuxer-max-bytes=32MiB".to_string(),
+        "--demuxer-max-back-bytes=8MiB".to_string(),
+        // - `--vd-lavc-threads` defaults to 0 (auto = one decode thread per
+        //   CPU core). FFmpeg's frame-threaded decoders need one full
+        //   decoded-frame buffer per thread to pipeline across them, so on a
+        //   high-core-count CPU this alone can hold a dozen-plus 4K frames
+        //   in memory at once. Capping it bounds that regardless of core
+        //   count -- and leaves more CPU headroom for whatever game is
+        //   running, as a side benefit.
+        //
+        //   This does NOT touch the codec's own reference-frame buffer
+        //   (DPB): HEVC/H.264 require keeping a resolution-dependent number
+        //   of decoded reference frames around to decode B-frames at all, so
+        //   4K will always need meaningfully more RAM than 1080p no matter
+        //   what caching/threading is set -- that part isn't a tunable, it's
+        //   how the codec works.
+        "--vd-lavc-threads=4".to_string(),
     ];
 
     let (mut rx, child) = sidecar

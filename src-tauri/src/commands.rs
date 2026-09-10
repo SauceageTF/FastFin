@@ -176,7 +176,7 @@ pub async fn start_playback(
     start_seconds: f64,
 ) -> Result<(), String> {
     let session = require_session(&state)?;
-    stop_playback_internal(&app, &state).await;
+    cleanup_playback(&app, &state);
 
     let play_session_id = uuid::Uuid::new_v4().to_string();
     let stream_url = jellyfin::build_stream_url(&session, &item_id, &play_session_id);
@@ -303,7 +303,16 @@ pub fn reposition_overlays(app: &AppHandle, state: &AppState) {
     }
 }
 
-async fn stop_playback_internal(app: &AppHandle, state: &State<'_, AppState>) {
+/// Tears down mpv, its host window, and the HUD window. Not `async` despite
+/// stopping playback -- the Jellyfin "stopped" report is fired off via
+/// `tauri::async_runtime::spawn` below rather than awaited, so nothing here
+/// actually needs to cross an `.await` point. That matters because this also
+/// has to run from `main`'s synchronous `CloseRequested` handler in `lib.rs`,
+/// which has no async context to await into -- if the app is closed while a
+/// video is playing, mpv keeps running and the HUD (which isn't owned by
+/// `main`, see `create_hud_window`'s doc comment, so it doesn't get destroyed
+/// automatically alongside it) is left on screen with nothing left to close it.
+pub fn cleanup_playback(app: &AppHandle, state: &AppState) {
     let handle = state.playback.lock().unwrap().take();
     if let Some(handle) = handle {
         handle.reporter_task.abort();
@@ -329,7 +338,7 @@ async fn stop_playback_internal(app: &AppHandle, state: &State<'_, AppState>) {
 
 #[tauri::command]
 pub async fn stop_playback(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    stop_playback_internal(&app, &state).await;
+    cleanup_playback(&app, &state);
     Ok(())
 }
 
@@ -341,7 +350,7 @@ pub async fn stop_playback(app: AppHandle, state: State<'_, AppState>) -> Result
 /// window itself is showing, not the main window the user actually sees.
 #[tauri::command]
 pub async fn go_back_to_item(app: AppHandle, state: State<'_, AppState>, item_id: String) -> Result<(), String> {
-    stop_playback_internal(&app, &state).await;
+    cleanup_playback(&app, &state);
     let _ = app.emit_to("main", "player://navigate-back", item_id);
     Ok(())
 }

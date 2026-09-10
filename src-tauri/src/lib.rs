@@ -38,6 +38,17 @@ pub fn run() {
                     // whole time PiP is up, but the HUD is exactly what's
                     // carrying the floating video's controls then, so it
                     // must stay visible regardless.
+                    // Playback isn't torn down anywhere on its own when
+                    // `main` closes: mpv is a detached sidecar process, and
+                    // the HUD overlay is `always_on_top` rather than owned by
+                    // `main` (see create_hud_window's doc comment for why),
+                    // so neither one goes away on its own when `main` does.
+                    // Left alone, closing the app mid-playback left mpv still
+                    // running and the HUD still floating on screen.
+                    if let WindowEvent::CloseRequested { .. } = event {
+                        let state = handle.state::<AppState>();
+                        commands::cleanup_playback(&handle, &state);
+                    }
                     if let WindowEvent::Focused(focused) = event {
                         let state = handle.state::<AppState>();
                         let pip_active = state
