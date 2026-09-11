@@ -21,6 +21,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     hero
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     if !continueWatching.isEmpty {
                         CarouselRow(title: "Continue Watching") {
@@ -46,6 +47,7 @@ struct HomeView: View {
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 32)
             }
 
@@ -94,9 +96,10 @@ struct HomeView: View {
             if let featured {
                 heroContent(for: featured)
                     .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(height: 480)
+        .frame(maxWidth: .infinity, minHeight: 480, maxHeight: 480)
         .clipped()
     }
 

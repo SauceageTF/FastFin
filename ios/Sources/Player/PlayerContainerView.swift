@@ -26,6 +26,23 @@ struct PlayerContainerView: View {
                     model.teardown()
                     dismiss()
                 }
+
+                if let playbackError = model.errorMessage {
+                    VStack(spacing: 16) {
+                        Text(playbackError)
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                        Button("Close") {
+                            model.teardown()
+                            dismiss()
+                        }
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.85))
+                }
             } else if let errorMessage {
                 Text(errorMessage).foregroundStyle(Theme.danger)
             } else {
@@ -48,13 +65,16 @@ struct PlayerContainerView: View {
             title = item.seriesName ?? item.name ?? "FastFin"
             subtitle = item.episodeLabel.flatMap { item.seriesName != nil ? $0 : nil }
 
-            guard let streamURL = MediaService.streamURL(session: session, itemID: itemID) else {
-                errorMessage = "Couldn't build a playback URL."
+            let startTicks = item.userData?.playbackPositionTicks ?? 0
+            guard let playbackURL = try await MediaService.playbackURL(session: session, itemID: itemID, startTicks: startTicks) else {
+                errorMessage = "The server didn't offer a playable stream for this item."
                 return
             }
 
-            let startSeconds = Double(item.userData?.playbackPositionTicks ?? 0) / 10_000_000
-            model = PlayerModel(url: streamURL, startSeconds: startSeconds)
+            // No client-side seek here: startTicks was already sent to the
+            // server above, so a transcoded HLS stream already begins at
+            // that offset -- seeking again locally would double-apply it.
+            model = PlayerModel(url: playbackURL)
         } catch {
             errorMessage = "Couldn't start playback: \(error.localizedDescription)"
         }

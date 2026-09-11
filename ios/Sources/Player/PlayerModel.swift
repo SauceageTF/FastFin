@@ -16,25 +16,62 @@ final class PlayerModel: NSObject, ObservableObject {
     @Published var isPiPActive = false
     @Published var isPiPPossible = false
 
+    /// Set if the item fails to become playable, or playback stalls with an
+    /// error -- surfaced by `PlayerContainerView` instead of leaving a
+    /// silent black screen with no indication anything went wrong.
+    @Published private(set) var errorMessage: String?
+
     /// Wired up by `PlayerViewControllerRepresentable` to the UIKit
     /// `AVPictureInPictureController`, which SwiftUI has no direct access to.
     var requestPiPToggle: (() -> Void)?
 
     private var timeObserverToken: Any?
+    private var durationObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
+    private var playerStatusObservation: NSKeyValueObservation?
+    private var failureObserver: NSObjectProtocol?
 
     init(url: URL, startSeconds: Double = 0) {
-        player = AVPlayer(url: url)
+        let item = AVPlayerItem(url: url)
+        player = AVPlayer(playerItem: item)
         super.init()
 
         if startSeconds > 0 {
             player.seek(to: CMTime(seconds: startSeconds, preferredTimescale: 600))
         }
 
-        itemStatusObservation = player.currentItem?.observe(\.duration, options: [.new]) { [weak self] item, _ in
-            let seconds = item.duration.seconds
+        durationObservation = item.observe(\.duration, options: [.new]) { [weak self] observedItem, _ in
+            let seconds = observedItem.duration.seconds
             guard seconds.isFinite, seconds > 0 else { return }
             Task { @MainActor in self?.duration = seconds }
+        }
+
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            Task { @MainActor in
+                switch observedItem.status {
+                case .failed:
+                    self?.report(observedItem.error, context: "couldn't load this video")
+                default:
+                    break
+                }
+            }
+        }
+
+        playerStatusObservation = player.observe(\.status, options: [.new]) { [weak self] observedPlayer, _ in
+            Task { @MainActor in
+                if observedPlayer.status == .failed {
+                    self?.report(observedPlayer.error, context: "playback failed")
+                }
+            }
+        }
+
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            Task { @MainActor in self?.report(error, context: "playback stopped") }
         }
 
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
@@ -53,6 +90,7 @@ final class PlayerModel: NSObject, ObservableObject {
 
     deinit {
         if let token = timeObserverToken { player.removeTimeObserver(token) }
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
     }
 
     func togglePlayPause() {
@@ -71,5 +109,11 @@ final class PlayerModel: NSObject, ObservableObject {
     func teardown() {
         player.pause()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func report(_ error: Error?, context: String) {
+        guard errorMessage == nil else { return } // keep the first, most useful error
+        let detail = (error as NSError?).map { " (\($0.domain) \($0.code): \($0.localizedDescription))" } ?? ""
+        errorMessage = "Playback \(context)\(detail)"
     }
 }

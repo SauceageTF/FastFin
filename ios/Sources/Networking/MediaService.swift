@@ -93,18 +93,37 @@ enum MediaService {
 
     // MARK: - Playback
     //
-    // TODO: direct-play only for now. Real playback needs the
-    // `getPostedPlaybackInfo` negotiation so the server can offer a
-    // transcoded stream when the device can't direct-play the source codec
-    // (mirrors what mpv gets for free on desktop but AVPlayer doesn't).
-    static func streamURL(session: JellyfinSession, itemID: String) -> URL? {
+    // Always negotiate through PlaybackInfo and force a server-side
+    // transcode to HLS, rather than direct-play. AVPlayer has zero native
+    // support for MKV (or several other codecs/containers Jellyfin libraries
+    // commonly hold), unlike mpv on desktop which plays almost anything
+    // directly -- direct-play produced a silent black screen against any
+    // non-AVPlayer-compatible source. Transcoding is less efficient than
+    // direct-play when the source *is* compatible, but reliable first;
+    // revisit once playback actually works end to end.
+    static func playbackURL(session: JellyfinSession, itemID: String, startTicks: Int) async throws -> URL? {
         guard let client = session.client, let accessToken = client.accessToken else { return nil }
-        var components = URLComponents(url: client.configuration.url, resolvingAgainstBaseURL: false)
-        components?.path += "/Videos/\(itemID)/stream"
-        components?.queryItems = [
-            URLQueryItem(name: "Static", value: "true"),
-            URLQueryItem(name: "api_key", value: accessToken),
-        ]
-        return components?.url
+
+        let parameters = Paths.GetPostedPlaybackInfoParameters(
+            userID: session.userID,
+            startTimeTicks: startTicks,
+            enableDirectPlay: false,
+            enableDirectStream: false,
+            enableTranscoding: true
+        )
+        let response = try await client.send(Paths.getPostedPlaybackInfo(itemID: itemID, parameters: parameters)).value
+
+        guard
+            let transcodingPath = response.mediaSources?.first?.transcodingURL,
+            let joined = client.url(path: transcodingPath),
+            var components = URLComponents(url: joined, resolvingAgainstBaseURL: false)
+        else { return nil }
+
+        var queryItems = components.queryItems ?? []
+        if !queryItems.contains(where: { $0.name == "api_key" }) {
+            queryItems.append(URLQueryItem(name: "api_key", value: accessToken))
+        }
+        components.queryItems = queryItems
+        return components.url
     }
 }

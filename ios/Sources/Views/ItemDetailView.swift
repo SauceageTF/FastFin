@@ -50,6 +50,7 @@ struct ItemDetailView: View {
                                 castRow(people)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 18)
                         .zIndex(1)
 
@@ -65,6 +66,7 @@ struct ItemDetailView: View {
                             similarSection
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, 32)
                 }
             } else if let errorMessage {
@@ -100,7 +102,7 @@ struct ItemDetailView: View {
             .padding(.horizontal, 18)
             .padding(.top, 6)
         }
-        .frame(height: 390)
+        .frame(maxWidth: .infinity, minHeight: 390, maxHeight: 390)
         .clipped()
     }
 

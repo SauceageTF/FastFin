@@ -28,6 +28,7 @@ struct SeasonEpisodesView: View {
                         ProgressView().tint(Theme.text).padding(.top, 40)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
             }
         }
