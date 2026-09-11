@@ -32,30 +32,8 @@ final class PlayerModel: NSObject, ObservableObject {
     private var failureObserver: NSObjectProtocol?
 
     init(url: URL, startSeconds: Double = 0) {
-        let item = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: item)
+        player = AVPlayer()
         super.init()
-
-        if startSeconds > 0 {
-            player.seek(to: CMTime(seconds: startSeconds, preferredTimescale: 600))
-        }
-
-        durationObservation = item.observe(\.duration, options: [.new]) { [weak self] observedItem, _ in
-            let seconds = observedItem.duration.seconds
-            guard seconds.isFinite, seconds > 0 else { return }
-            Task { @MainActor in self?.duration = seconds }
-        }
-
-        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
-            Task { @MainActor in
-                switch observedItem.status {
-                case .failed:
-                    self?.report(observedItem.error, context: "couldn't load this video")
-                default:
-                    break
-                }
-            }
-        }
 
         playerStatusObservation = player.observe(\.status, options: [.new]) { [weak self] observedPlayer, _ in
             Task { @MainActor in
@@ -63,15 +41,6 @@ final class PlayerModel: NSObject, ObservableObject {
                     self?.report(observedPlayer.error, context: "playback failed")
                 }
             }
-        }
-
-        failureObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] notification in
-            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-            Task { @MainActor in self?.report(error, context: "playback stopped") }
         }
 
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
@@ -85,12 +54,57 @@ final class PlayerModel: NSObject, ObservableObject {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        player.play()
+        load(url: url, startSeconds: startSeconds)
     }
 
     deinit {
         if let token = timeObserverToken { player.removeTimeObserver(token) }
         if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+    }
+
+    /// Swaps the currently playing source -- used both by the initial load
+    /// and by switching audio/subtitle tracks, which rebuild the transcode
+    /// URL with new stream indices rather than switching an in-place HLS
+    /// rendition. Reuses the same `AVPlayer` (and hence the same
+    /// `AVPlayerLayer`/PiP controller already attached to it) instead of
+    /// tearing the whole player down.
+    func switchSource(url: URL, startSeconds: Double = 0) {
+        errorMessage = nil
+        duration = 0
+        currentTime = 0
+        load(url: url, startSeconds: startSeconds)
+    }
+
+    private func load(url: URL, startSeconds: Double) {
+        let item = AVPlayerItem(url: url)
+
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        durationObservation = item.observe(\.duration, options: [.new]) { [weak self] observedItem, _ in
+            let seconds = observedItem.duration.seconds
+            guard seconds.isFinite, seconds > 0 else { return }
+            Task { @MainActor in self?.duration = seconds }
+        }
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            Task { @MainActor in
+                if observedItem.status == .failed {
+                    self?.report(observedItem.error, context: "couldn't load this video")
+                }
+            }
+        }
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            Task { @MainActor in self?.report(error, context: "playback stopped") }
+        }
+
+        player.replaceCurrentItem(with: item)
+        if startSeconds > 0 {
+            player.seek(to: CMTime(seconds: startSeconds, preferredTimescale: 600))
+        }
+        player.play()
     }
 
     func togglePlayPause() {

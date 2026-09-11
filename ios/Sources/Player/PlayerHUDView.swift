@@ -9,6 +9,12 @@ struct PlayerHUDView: View {
     @ObservedObject var model: PlayerModel
     let title: String
     let subtitle: String?
+    let audioTracks: [TrackOption]
+    let subtitleTracks: [TrackOption]
+    let selectedAudioIndex: Int?
+    let selectedSubtitleIndex: Int?
+    let onSelectAudio: (Int?) -> Void
+    let onSelectSubtitle: (Int?) -> Void
     let onClose: () -> Void
 
     @State private var controlsVisible = true
@@ -64,6 +70,10 @@ struct PlayerHUDView: View {
 
             Spacer()
 
+            if !audioTracks.isEmpty || !subtitleTracks.isEmpty {
+                tracksMenu
+            }
+
             if model.isPiPPossible {
                 Button { model.requestPiPToggle?() } label: {
                     Image(systemName: "pip.enter")
@@ -74,6 +84,54 @@ struct PlayerHUDView: View {
 
             AirPlayButton()
                 .frame(width: 22, height: 22)
+        }
+    }
+
+    private var tracksMenu: some View {
+        Menu {
+            if !audioTracks.isEmpty {
+                Section("Audio") {
+                    ForEach(audioTracks) { track in
+                        Button {
+                            onSelectAudio(track.index)
+                        } label: {
+                            if track.index == selectedAudioIndex {
+                                Label(track.title, systemImage: "checkmark")
+                            } else {
+                                Text(track.title)
+                            }
+                        }
+                    }
+                }
+            }
+            if !subtitleTracks.isEmpty {
+                Section("Subtitles") {
+                    Button {
+                        onSelectSubtitle(nil)
+                    } label: {
+                        if selectedSubtitleIndex == nil {
+                            Label("Off", systemImage: "checkmark")
+                        } else {
+                            Text("Off")
+                        }
+                    }
+                    ForEach(subtitleTracks) { track in
+                        Button {
+                            onSelectSubtitle(track.index)
+                        } label: {
+                            if track.index == selectedSubtitleIndex {
+                                Label(track.title, systemImage: "checkmark")
+                            } else {
+                                Text(track.title)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "captions.bubble")
+                .font(.system(size: 18))
+                .foregroundStyle(.white)
         }
     }
 

@@ -9,6 +9,7 @@ struct SeasonEpisodesView: View {
     let seasonName: String
 
     @EnvironmentObject private var session: JellyfinSession
+    @EnvironmentObject private var playerPresenter: PlayerPresenter
     @State private var episodes: [BaseItemDto]?
 
     var body: some View {
@@ -19,7 +20,7 @@ struct SeasonEpisodesView: View {
                 LazyVStack(spacing: 10) {
                     if let episodes {
                         ForEach(episodes, id: \.id) { episode in
-                            NavigationLink(value: AppRoute.player(episode.id ?? "")) {
+                            Button { playerPresenter.play(episode.id ?? "") } label: {
                                 row(for: episode)
                             }
                             .buttonStyle(.plain)

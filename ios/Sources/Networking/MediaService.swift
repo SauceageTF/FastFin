@@ -134,19 +134,34 @@ enum MediaService {
     // real MediaSourceId isn't guaranteed to equal the item's own ID, and
     // the server won't open a transcode for an id it doesn't recognize as
     // that item's source.
-    static func playbackURL(session: JellyfinSession, itemID: String, startTicks: Int) async throws -> URL? {
+    static func playbackSource(
+        session: JellyfinSession,
+        itemID: String,
+        startTicks: Int,
+        audioStreamIndex: Int? = nil,
+        subtitleStreamIndex: Int? = nil
+    ) async throws -> PlaybackSource? {
         guard let client = session.client, let accessToken = client.accessToken else { return nil }
 
-        let infoParameters = Paths.GetPostedPlaybackInfoParameters(userID: session.userID, startTimeTicks: startTicks)
+        let infoParameters = Paths.GetPostedPlaybackInfoParameters(
+            userID: session.userID,
+            startTimeTicks: startTicks,
+            audioStreamIndex: audioStreamIndex,
+            subtitleStreamIndex: subtitleStreamIndex
+        )
         let response = try await client.send(Paths.getPostedPlaybackInfo(itemID: itemID, parameters: infoParameters)).value
 
-        guard let mediaSourceID = response.mediaSources?.first?.id else { return nil }
+        guard let mediaSource = response.mediaSources?.first, let mediaSourceID = mediaSource.id else { return nil }
         let playSessionID = response.playSessionID ?? UUID().uuidString
+
+        let streams = mediaSource.mediaStreams ?? []
+        let audioTracks = trackOptions(from: streams, type: .audio)
+        let subtitleTracks = trackOptions(from: streams, type: .subtitle)
 
         guard let joined = client.url(path: "/Videos/\(itemID)/master.m3u8") else { return nil }
         guard var components = URLComponents(url: joined, resolvingAgainstBaseURL: false) else { return nil }
 
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "api_key", value: accessToken),
             URLQueryItem(name: "DeviceId", value: session.deviceID),
             URLQueryItem(name: "MediaSourceId", value: mediaSourceID),
@@ -157,6 +172,50 @@ enum MediaService {
             URLQueryItem(name: "SegmentContainer", value: "ts"),
             URLQueryItem(name: "StartTimeTicks", value: String(startTicks)),
         ]
-        return components.url
+        if let audioStreamIndex {
+            queryItems.append(URLQueryItem(name: "AudioStreamIndex", value: String(audioStreamIndex)))
+        }
+        if let subtitleStreamIndex {
+            // Burn the subtitle into the video rather than relying on an HLS
+            // alternate-rendition text track -- guarantees it shows up
+            // regardless of whether the source subtitle is text or bitmap
+            // (PGS/VobSub), at the cost of a heavier re-encode.
+            queryItems.append(URLQueryItem(name: "SubtitleStreamIndex", value: String(subtitleStreamIndex)))
+            queryItems.append(URLQueryItem(name: "SubtitleMethod", value: "Encode"))
+        }
+        components.queryItems = queryItems
+
+        guard let url = components.url else { return nil }
+        return PlaybackSource(
+            url: url,
+            audioTracks: audioTracks,
+            subtitleTracks: subtitleTracks,
+            selectedAudioIndex: audioStreamIndex,
+            selectedSubtitleIndex: subtitleStreamIndex
+        )
     }
+
+    private static func trackOptions(from streams: [MediaStream], type: MediaStreamType) -> [TrackOption] {
+        streams
+            .filter { $0.type == type }
+            .compactMap { stream in
+                guard let index = stream.index else { return nil }
+                let title = stream.displayTitle ?? stream.language ?? "\(type == .audio ? "Audio" : "Subtitle") \(index)"
+                return TrackOption(index: index, title: title)
+            }
+    }
+}
+
+struct TrackOption: Identifiable, Hashable {
+    let index: Int
+    let title: String
+    var id: Int { index }
+}
+
+struct PlaybackSource {
+    let url: URL
+    let audioTracks: [TrackOption]
+    let subtitleTracks: [TrackOption]
+    let selectedAudioIndex: Int?
+    let selectedSubtitleIndex: Int?
 }

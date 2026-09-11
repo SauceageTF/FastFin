@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RootTabView: View {
+    @EnvironmentObject private var playerPresenter: PlayerPresenter
+
     init() {
         let appearance = UITabBarAppearance()
         appearance.configureWithTransparentBackground()
@@ -24,5 +26,8 @@ struct RootTabView: View {
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
         .tint(Theme.accent)
+        .fullScreenCover(item: $playerPresenter.request) { request in
+            PlayerContainerView(itemID: request.id)
+        }
     }
 }

@@ -9,6 +9,7 @@ struct ItemDetailView: View {
     let itemID: String
 
     @EnvironmentObject private var session: JellyfinSession
+    @EnvironmentObject private var playerPresenter: PlayerPresenter
     @Environment(\.dismiss) private var dismiss
     @State private var item: BaseItemDto?
     @State private var seasons: [BaseItemDto]?
@@ -28,7 +29,6 @@ struct ItemDetailView: View {
 
                         VStack(alignment: .leading, spacing: 16) {
                             titleBlock(for: item)
-                                .border(Color.yellow, width: 2) // TEMP DIAGNOSTIC
                             metaRow(for: item)
 
                             if item.type != .series {
@@ -109,10 +109,8 @@ struct ItemDetailView: View {
             }
             .frame(width: geo.size.width, height: 390)
             .clipped()
-            .border(Color.green, width: 1) // TEMP DIAGNOSTIC
         }
         .frame(height: 390)
-        .border(Color.red, width: 3) // TEMP DIAGNOSTIC
     }
 
     // MARK: - Title / meta
@@ -165,7 +163,7 @@ struct ItemDetailView: View {
 
     private func playButton(for item: BaseItemDto) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            NavigationLink(value: AppRoute.player(item.id ?? "")) {
+            Button { playerPresenter.play(item.id ?? "") } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill")
                     Text(item.userData?.playbackPositionTicks != nil ? "Resume" : "Play")
@@ -272,7 +270,7 @@ struct ItemDetailView: View {
             if let nextEpisodes, !nextEpisodes.isEmpty {
                 CarouselRow(title: "Next Up") {
                     ForEach(nextEpisodes, id: \.id) { episode in
-                        NavigationLink(value: AppRoute.player(episode.id ?? "")) {
+                        Button { playerPresenter.play(episode.id ?? "") } label: {
                             EpisodeCard(
                                 episode: episode,
                                 imageURL: MediaService.imageURL(session: session, itemID: episode.id ?? "")

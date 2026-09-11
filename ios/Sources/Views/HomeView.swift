@@ -6,6 +6,7 @@ import SwiftUI
 /// and one "Recently Added in {Library}" carousel per library.
 struct HomeView: View {
     @EnvironmentObject private var session: JellyfinSession
+    @EnvironmentObject private var playerPresenter: PlayerPresenter
 
     @State private var libraries: [BaseItemDto] = []
     @State private var libraryItems: [String: [BaseItemDto]] = [:]
@@ -21,12 +22,14 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     hero
-                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     if !continueWatching.isEmpty {
                         CarouselRow(title: "Continue Watching") {
                             ForEach(continueWatching, id: \.id) { item in
-                                NavigationLink(value: AppRoute.item(item.id ?? "")) {
+                                // Matches library/+page.svelte's `.wide-card`, which links
+                                // straight to `/player/{id}` -- one tap to resume, not a
+                                // detour through the detail page.
+                                Button { playerPresenter.play(item.id ?? "") } label: {
                                     ContinueWatchingCard(item: item, imageURL: imageURL(for: item))
                                 }
                                 .buttonStyle(.plain)
@@ -71,11 +74,12 @@ struct HomeView: View {
     @ViewBuilder
     private var hero: some View {
         // GeometryReader pins an explicit, unambiguous width for everything
-        // inside instead of relying on flexible frame(maxWidth: .infinity)
-        // propagating correctly through the ZStack -- that propagation is
-        // what fixed the carousels below, but visibly didn't resolve here,
-        // so this pins it directly rather than guessing at a second
-        // flexible-layout fix.
+        // inside. Important: don't ALSO wrap the `hero` call site in a
+        // frame(maxWidth: .infinity) -- that's what caused the cutoff.
+        // GeometryReader already greedily fills whatever it's offered, and
+        // stacking an outer flexible frame on top of it created a sizing
+        // conflict between the two. ItemDetailView's near-identical hero
+        // never had that outer wrapper, which is why it was never broken.
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
                 if let featured, let backdrop = MediaService.backdropURL(session: session, itemID: featured.backdropSourceID ?? featured.id ?? "") {
@@ -94,15 +98,12 @@ struct HomeView: View {
                 if let featured {
                     heroContent(for: featured)
                         .padding(18)
-                        .border(Color.yellow, width: 2) // TEMP DIAGNOSTIC -- remove once the cutoff is found
                 }
             }
             .frame(width: geo.size.width, height: 480)
             .clipped()
-            .border(Color.green, width: 1) // TEMP DIAGNOSTIC
         }
         .frame(height: 480)
-        .border(Color.red, width: 3) // TEMP DIAGNOSTIC
     }
 
     private var topBar: some View {
@@ -129,7 +130,7 @@ struct HomeView: View {
                 }
             } else {
                 Text(item.name ?? "")
-                    .font(.system(size: 28, weight: .heavy)) // TEMP DIAGNOSTIC -- was Theme.displayFont, ruling out the unbundled Sora font as a cause
+                    .font(Theme.displayFont(28, weight: .heavy))
                     .foregroundStyle(Theme.text)
                     .lineLimit(2)
             }
@@ -149,14 +150,12 @@ struct HomeView: View {
                 // Series aren't directly playable -- send that tap to the
                 // detail page to pick a season/episode instead, matching
                 // library/+page.svelte's "View Episodes" vs "Play" hero button.
-                NavigationLink(value: item.type == .series ? AppRoute.item(item.id ?? "") : AppRoute.player(item.id ?? "")) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "play.fill")
-                        Text(item.type == .series ? "View Episodes" : (item.userData?.playbackPositionTicks != nil ? "Resume" : "Play"))
-                            .font(Theme.displayFont(14, weight: .bold))
+                Group {
+                    if item.type == .series {
+                        NavigationLink(value: AppRoute.item(item.id ?? "")) { primaryHeroButtonLabel(for: item) }
+                    } else {
+                        Button { playerPresenter.play(item.id ?? "") } label: { primaryHeroButtonLabel(for: item) }
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
                 }
                 .buttonStyle(.plain)
                 .background(Theme.text)
@@ -172,6 +171,16 @@ struct HomeView: View {
                 .foregroundStyle(Theme.text)
             }
         }
+    }
+
+    private func primaryHeroButtonLabel(for item: BaseItemDto) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "play.fill")
+            Text(item.type == .series ? "View Episodes" : (item.userData?.playbackPositionTicks != nil ? "Resume" : "Play"))
+                .font(Theme.displayFont(14, weight: .bold))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
     }
 
     // MARK: - Data
