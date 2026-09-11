@@ -97,10 +97,12 @@ struct HomeView: View {
                             RemoteImage(url: backdrop)
                         }
                         .buttonStyle(.plain)
+                        .border(Color.blue, width: 2) // TEMP DIAGNOSTIC 2
                     } else {
                         RemoteImage(url: backdrop)
                             .contentShape(Rectangle())
                             .onTapGesture { playerPresenter.play(featured.id ?? "") }
+                            .border(Color.blue, width: 2) // TEMP DIAGNOSTIC 2
                     }
                 } else {
                     Theme.backgroundElevated
@@ -113,16 +115,20 @@ struct HomeView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 6)
                     .frame(maxHeight: .infinity, alignment: .top)
+                    .border(Color.orange, width: 2) // TEMP DIAGNOSTIC 2
 
                 if let featured {
                     heroContent(for: featured, titleItem: heroTitleItem ?? featured)
                         .padding(18)
+                        .border(Color.yellow, width: 2) // TEMP DIAGNOSTIC 2
                 }
             }
             .frame(width: geo.size.width, height: 480)
             .clipped()
+            .border(Color.green, width: 2) // TEMP DIAGNOSTIC 2
         }
         .frame(height: 480)
+        .border(Color.red, width: 4) // TEMP DIAGNOSTIC 2
     }
 
     private var topBar: some View {

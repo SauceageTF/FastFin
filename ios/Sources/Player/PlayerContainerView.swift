@@ -22,6 +22,10 @@ struct PlayerContainerView: View {
     @State private var subtitleTracks: [TrackOption] = []
     @State private var selectedAudioIndex: Int?
     @State private var selectedSubtitleIndex: Int?
+    /// Sanitized (no api_key) diagnostic string shown alongside a playback
+    /// error, so a failure can be reported precisely from a screenshot
+    /// instead of just "same error" with no way to tell what was attempted.
+    @State private var diagnosticInfo = ""
 
     var body: some View {
         ZStack {
@@ -45,6 +49,7 @@ struct PlayerContainerView: View {
                     selectedSubtitleIndex: selectedSubtitleIndex,
                     onSelectAudio: { switchTrack(audioIndex: $0, subtitleIndex: selectedSubtitleIndex) },
                     onSelectSubtitle: { switchTrack(audioIndex: selectedAudioIndex, subtitleIndex: $0) },
+                    diagnosticInfo: diagnosticInfo,
                     onClose: {
                         model.teardown()
                         dismiss()
@@ -86,6 +91,7 @@ struct PlayerContainerView: View {
             subtitleTracks = source.subtitleTracks
             selectedAudioIndex = source.selectedAudioIndex
             selectedSubtitleIndex = source.selectedSubtitleIndex
+            diagnosticInfo = "item \(itemID.prefix(8)) · source \(source.mediaSourceID.prefix(8)) · session \(source.playSessionID.prefix(8)) · \(source.url.path)"
 
             // No client-side seek here: startTicks was already sent to the
             // server above, so a transcoded HLS stream already begins at
@@ -128,6 +134,7 @@ private struct PlayerActiveContent: View {
     let selectedSubtitleIndex: Int?
     let onSelectAudio: (Int?) -> Void
     let onSelectSubtitle: (Int?) -> Void
+    let diagnosticInfo: String
     let onClose: () -> Void
 
     var body: some View {
@@ -158,14 +165,20 @@ private struct PlayerActiveContent: View {
             )
 
             if let playbackError = model.errorMessage {
-                VStack(spacing: 16) {
+                VStack(spacing: 12) {
                     Text(playbackError)
                         .font(.system(size: 14))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                    Text(diagnosticInfo)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
                     Button("Close", action: onClose)
                         .foregroundStyle(Theme.accent)
+                        .padding(.top, 8)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black.opacity(0.85))

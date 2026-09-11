@@ -188,6 +188,8 @@ enum MediaService {
         guard let url = components.url else { return nil }
         return PlaybackSource(
             url: url,
+            mediaSourceID: mediaSourceID,
+            playSessionID: playSessionID,
             audioTracks: audioTracks,
             subtitleTracks: subtitleTracks,
             selectedAudioIndex: audioStreamIndex,
@@ -214,6 +216,8 @@ struct TrackOption: Identifiable, Hashable {
 
 struct PlaybackSource {
     let url: URL
+    let mediaSourceID: String
+    let playSessionID: String
     let audioTracks: [TrackOption]
     let subtitleTracks: [TrackOption]
     let selectedAudioIndex: Int?
