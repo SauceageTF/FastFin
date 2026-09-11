@@ -28,9 +28,14 @@ struct PlayerContainerView: View {
             Color.black.ignoresSafeArea()
 
             if let model {
-                PlayerViewControllerRepresentable(model: model)
-                    .ignoresSafeArea()
-                PlayerHUDView(
+                // A separate view holding `model` as `@ObservedObject`, not
+                // `@State` here, is deliberate: PlayerContainerView reading
+                // `model.errorMessage` directly in ITS OWN body doesn't
+                // actually subscribe to PlayerModel's @Published changes
+                // (only @ObservedObject/@StateObject do) -- the error
+                // overlay could be silently never appearing even when
+                // PlayerModel correctly captured a real error.
+                PlayerActiveContent(
                     model: model,
                     title: title,
                     subtitle: subtitle,
@@ -45,23 +50,6 @@ struct PlayerContainerView: View {
                         dismiss()
                     }
                 )
-
-                if let playbackError = model.errorMessage {
-                    VStack(spacing: 16) {
-                        Text(playbackError)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                        Button("Close") {
-                            model.teardown()
-                            dismiss()
-                        }
-                        .foregroundStyle(Theme.accent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.85))
-                }
             } else if let errorMessage {
                 VStack(spacing: 16) {
                     Text(errorMessage)
@@ -75,7 +63,7 @@ struct PlayerContainerView: View {
             }
         }
         .statusBarHidden()
-        .onAppear { OrientationLock.current = .allButUpsideDown }
+        .onAppear { OrientationLock.current = .landscape }
         .onDisappear {
             OrientationLock.current = .portrait
             model?.teardown()
@@ -123,6 +111,65 @@ struct PlayerContainerView: View {
             selectedAudioIndex = source.selectedAudioIndex
             selectedSubtitleIndex = source.selectedSubtitleIndex
             model.switchSource(url: source.url)
+        }
+    }
+}
+
+/// Everything that needs to react to `PlayerModel`'s @Published state --
+/// split out from `PlayerContainerView` specifically so that reactivity
+/// works (see the comment at its call site above).
+private struct PlayerActiveContent: View {
+    @ObservedObject var model: PlayerModel
+    let title: String
+    let subtitle: String?
+    let audioTracks: [TrackOption]
+    let subtitleTracks: [TrackOption]
+    let selectedAudioIndex: Int?
+    let selectedSubtitleIndex: Int?
+    let onSelectAudio: (Int?) -> Void
+    let onSelectSubtitle: (Int?) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            PlayerViewControllerRepresentable(model: model)
+                .ignoresSafeArea()
+
+            // Picture in Picture floats the video in its own system-managed
+            // window -- force-landscaping the rest of the app while it's
+            // active would fight whatever orientation the user is actually
+            // browsing in behind it.
+            Color.clear
+                .onChange(of: model.isPiPActive) { _, isPiPActive in
+                    OrientationLock.current = isPiPActive ? .all : .landscape
+                }
+
+            PlayerHUDView(
+                model: model,
+                title: title,
+                subtitle: subtitle,
+                audioTracks: audioTracks,
+                subtitleTracks: subtitleTracks,
+                selectedAudioIndex: selectedAudioIndex,
+                selectedSubtitleIndex: selectedSubtitleIndex,
+                onSelectAudio: onSelectAudio,
+                onSelectSubtitle: onSelectSubtitle,
+                onClose: onClose
+            )
+
+            if let playbackError = model.errorMessage {
+                VStack(spacing: 16) {
+                    Text(playbackError)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    Button("Close", action: onClose)
+                        .foregroundStyle(Theme.accent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.85))
+            }
         }
     }
 }
