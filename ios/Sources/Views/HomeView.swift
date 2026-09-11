@@ -94,12 +94,15 @@ struct HomeView: View {
                 if let featured {
                     heroContent(for: featured)
                         .padding(18)
+                        .border(Color.yellow, width: 2) // TEMP DIAGNOSTIC -- remove once the cutoff is found
                 }
             }
             .frame(width: geo.size.width, height: 480)
             .clipped()
+            .border(Color.green, width: 1) // TEMP DIAGNOSTIC
         }
         .frame(height: 480)
+        .border(Color.red, width: 3) // TEMP DIAGNOSTIC
     }
 
     private var topBar: some View {
@@ -126,7 +129,7 @@ struct HomeView: View {
                 }
             } else {
                 Text(item.name ?? "")
-                    .font(Theme.displayFont(28, weight: .heavy))
+                    .font(.system(size: 28, weight: .heavy)) // TEMP DIAGNOSTIC -- was Theme.displayFont, ruling out the unbundled Sora font as a cause
                     .foregroundStyle(Theme.text)
                     .lineLimit(2)
             }

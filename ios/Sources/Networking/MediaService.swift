@@ -125,26 +125,32 @@ enum MediaService {
 
     // MARK: - Playback
     //
-    // Builds the HLS transcode URL directly rather than trusting
-    // PlaybackInfo's negotiated `transcodingUrl`: without a full
-    // DeviceProfile in the POST body describing what AVPlayer actually
-    // supports, the server can't reliably tell it needs to transcode, and
-    // came back with no transcoding URL at all (mediaSources?.first was
-    // "playable" per the server's own judgement, but that judgement assumes
-    // a client that can direct-play MKV, which AVPlayer can't). Forcing the
-    // well-known `/master.m3u8` transcode endpoint with an explicit
-    // H.264/AAC target sidesteps that negotiation entirely and always gets
-    // something AVPlayer can decode.
-    static func playbackURL(session: JellyfinSession, itemID: String, startTicks: Int) -> URL? {
+    // Builds the HLS transcode URL by hand (explicit H.264/AAC target)
+    // rather than trusting PlaybackInfo's negotiated `transcodingUrl`
+    // (nil without a full DeviceProfile describing what AVPlayer supports).
+    // But the MediaSourceId and PlaySessionId still have to come from a
+    // real PlaybackInfo call first -- guessing MediaSourceId == itemID
+    // produced NSURLErrorResourceUnavailable (-1008), because a source's
+    // real MediaSourceId isn't guaranteed to equal the item's own ID, and
+    // the server won't open a transcode for an id it doesn't recognize as
+    // that item's source.
+    static func playbackURL(session: JellyfinSession, itemID: String, startTicks: Int) async throws -> URL? {
         guard let client = session.client, let accessToken = client.accessToken else { return nil }
+
+        let infoParameters = Paths.GetPostedPlaybackInfoParameters(userID: session.userID, startTimeTicks: startTicks)
+        let response = try await client.send(Paths.getPostedPlaybackInfo(itemID: itemID, parameters: infoParameters)).value
+
+        guard let mediaSourceID = response.mediaSources?.first?.id else { return nil }
+        let playSessionID = response.playSessionID ?? UUID().uuidString
+
         guard let joined = client.url(path: "/Videos/\(itemID)/master.m3u8") else { return nil }
         guard var components = URLComponents(url: joined, resolvingAgainstBaseURL: false) else { return nil }
 
         components.queryItems = [
             URLQueryItem(name: "api_key", value: accessToken),
             URLQueryItem(name: "DeviceId", value: session.deviceID),
-            URLQueryItem(name: "MediaSourceId", value: itemID),
-            URLQueryItem(name: "PlaySessionId", value: UUID().uuidString),
+            URLQueryItem(name: "MediaSourceId", value: mediaSourceID),
+            URLQueryItem(name: "PlaySessionId", value: playSessionID),
             URLQueryItem(name: "VideoCodec", value: "h264"),
             URLQueryItem(name: "AudioCodec", value: "aac"),
             URLQueryItem(name: "TranscodingMaxAudioChannels", value: "2"),

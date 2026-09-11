@@ -28,6 +28,7 @@ struct ItemDetailView: View {
 
                         VStack(alignment: .leading, spacing: 16) {
                             titleBlock(for: item)
+                                .border(Color.yellow, width: 2) // TEMP DIAGNOSTIC
                             metaRow(for: item)
 
                             if item.type != .series {
@@ -108,8 +109,10 @@ struct ItemDetailView: View {
             }
             .frame(width: geo.size.width, height: 390)
             .clipped()
+            .border(Color.green, width: 1) // TEMP DIAGNOSTIC
         }
         .frame(height: 390)
+        .border(Color.red, width: 3) // TEMP DIAGNOSTIC
     }
 
     // MARK: - Title / meta
