@@ -1,0 +1,61 @@
+name: FastFin
+options:
+  bundleIdPrefix: com.veeha
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  JellyfinAPI:
+    url: https://github.com/jellyfin/jellyfin-sdk-swift
+    exactVersion: 3.1.0
+
+targets:
+  FastFin:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources
+    dependencies:
+      - package: JellyfinAPI
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: FastFin
+        UILaunchScreen: {}
+        # Player screen runs landscape+fullscreen; every other screen locks
+        # itself to portrait via OrientationLock (see Sources/Player). The
+        # app-wide list has to include both since UIKit won't rotate into an
+        # orientation that isn't listed here, no matter what a view controller
+        # requests.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Background Modes > Audio, AirPlay, and Picture in Picture -- lets
+        # mpv-equivalent (AVPlayer) playback and PiP continue when the app is
+        # backgrounded.
+        UIBackgroundModes:
+          - audio
+        # Jellyfin servers are commonly self-hosted on a LAN with a
+        # self-signed cert or plain HTTP. Revisit with a narrower exception
+        # list (NSExceptionDomains) once real servers are being tested
+        # against, rather than allowing arbitrary loads app-wide.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.veeha.fastfin
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Swift 5 language mode deliberately, even though the JellyfinAPI
+        # package itself builds as Swift 6 -- that's an independent knob per
+        # target, and Swift 6's strict concurrency checking would flag a lot
+        # of ordinary AVFoundation callback code (KVO, periodic time
+        # observers) that's fine in practice but hasn't been written with
+        # strict-mode actor isolation in mind. Worth revisiting once the app
+        # has had a first real build/run pass.
+        SWIFT_VERSION: "5.0"
+        ENABLE_PREVIEWS: YES
