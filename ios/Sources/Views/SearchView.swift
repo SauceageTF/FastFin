@@ -36,6 +36,7 @@ struct SearchView: View {
             }
         }
         .navigationTitle("Search")
+        .appRouteDestinations()
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
         .onChange(of: query) { _, newValue in
             searchTask?.cancel()

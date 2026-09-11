@@ -70,28 +70,36 @@ struct HomeView: View {
 
     @ViewBuilder
     private var hero: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let featured, let backdrop = MediaService.backdropURL(session: session, itemID: featured.backdropSourceID ?? featured.id ?? "") {
-                RemoteImage(url: backdrop)
-            } else {
-                Theme.backgroundElevated
+        // GeometryReader pins an explicit, unambiguous width for everything
+        // inside instead of relying on flexible frame(maxWidth: .infinity)
+        // propagating correctly through the ZStack -- that propagation is
+        // what fixed the carousels below, but visibly didn't resolve here,
+        // so this pins it directly rather than guessing at a second
+        // flexible-layout fix.
+        GeometryReader { geo in
+            ZStack(alignment: .bottomLeading) {
+                if let featured, let backdrop = MediaService.backdropURL(session: session, itemID: featured.backdropSourceID ?? featured.id ?? "") {
+                    RemoteImage(url: backdrop)
+                } else {
+                    Theme.backgroundElevated
+                }
+
+                LinearGradient(colors: [.clear, Theme.background], startPoint: .init(x: 0.5, y: 0.3), endPoint: .bottom)
+
+                topBar
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+                    .frame(maxHeight: .infinity, alignment: .top)
+
+                if let featured {
+                    heroContent(for: featured)
+                        .padding(18)
+                }
             }
-
-            LinearGradient(colors: [.clear, Theme.background], startPoint: .init(x: 0.5, y: 0.3), endPoint: .bottom)
-
-            topBar
-                .padding(.horizontal, 18)
-                .padding(.top, 6)
-                .frame(maxHeight: .infinity, alignment: .top)
-
-            if let featured {
-                heroContent(for: featured)
-                    .padding(18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            .frame(width: geo.size.width, height: 480)
+            .clipped()
         }
-        .frame(maxWidth: .infinity, minHeight: 480, maxHeight: 480)
-        .clipped()
+        .frame(height: 480)
     }
 
     private var topBar: some View {

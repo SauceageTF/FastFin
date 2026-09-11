@@ -34,6 +34,7 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
+        .appRouteDestinations()
         .task {
             do {
                 libraries = try await MediaService.libraries(session: session)

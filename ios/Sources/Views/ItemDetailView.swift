@@ -82,28 +82,34 @@ struct ItemDetailView: View {
     // MARK: - Hero
 
     private func hero(for item: BaseItemDto) -> some View {
-        ZStack(alignment: .topLeading) {
-            if let id = item.backdropSourceID, let url = MediaService.backdropURL(session: session, itemID: id) {
-                RemoteImage(url: url)
-            } else {
-                Theme.backgroundElevated
-            }
+        // See HomeView.hero's comment: GeometryReader pins an explicit width
+        // here rather than relying on frame(maxWidth: .infinity) to
+        // propagate through the ZStack correctly.
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                if let id = item.backdropSourceID, let url = MediaService.backdropURL(session: session, itemID: id) {
+                    RemoteImage(url: url)
+                } else {
+                    Theme.backgroundElevated
+                }
 
-            LinearGradient(
-                colors: [Theme.background.opacity(0.15), Theme.background.opacity(0.1), Theme.background.opacity(0.96)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+                LinearGradient(
+                    colors: [Theme.background.opacity(0.15), Theme.background.opacity(0.1), Theme.background.opacity(0.96)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
 
-            HStack {
-                GlassCircleButton(systemImage: "chevron.left") { dismiss() }
-                Spacer()
+                HStack {
+                    GlassCircleButton(systemImage: "chevron.left") { dismiss() }
+                    Spacer()
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 6)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 6)
+            .frame(width: geo.size.width, height: 390)
+            .clipped()
         }
-        .frame(maxWidth: .infinity, minHeight: 390, maxHeight: 390)
-        .clipped()
+        .frame(height: 390)
     }
 
     // MARK: - Title / meta

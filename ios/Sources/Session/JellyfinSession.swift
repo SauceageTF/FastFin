@@ -22,7 +22,10 @@ final class JellyfinSession: ObservableObject {
         static let deviceID = "deviceID"
     }
 
-    private lazy var deviceID: String = {
+    /// Needed outside this class too, to build the HLS transcode URL
+    /// (`MediaService.playbackURL`) -- Jellyfin's transcode endpoint takes
+    /// the device ID as a query param.
+    private(set) lazy var deviceID: String = {
         if let existing = KeychainStore.get(Key.deviceID) { return existing }
         let generated = UUID().uuidString
         KeychainStore.set(generated, for: Key.deviceID)

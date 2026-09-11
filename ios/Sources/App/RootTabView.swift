@@ -15,11 +15,9 @@ struct RootTabView: View {
                 .tabItem { Label("Home", systemImage: "house.fill") }
 
             NavigationStack { LibraryView() }
-                .appRouteDestinations()
                 .tabItem { Label("Library", systemImage: "square.grid.2x2") }
 
             NavigationStack { SearchView() }
-                .appRouteDestinations()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
 
             NavigationStack { SettingsView() }

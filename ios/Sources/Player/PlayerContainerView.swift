@@ -66,8 +66,8 @@ struct PlayerContainerView: View {
             subtitle = item.episodeLabel.flatMap { item.seriesName != nil ? $0 : nil }
 
             let startTicks = item.userData?.playbackPositionTicks ?? 0
-            guard let playbackURL = try await MediaService.playbackURL(session: session, itemID: itemID, startTicks: startTicks) else {
-                errorMessage = "The server didn't offer a playable stream for this item."
+            guard let playbackURL = MediaService.playbackURL(session: session, itemID: itemID, startTicks: startTicks) else {
+                errorMessage = "Couldn't build a playback URL."
                 return
             }
 
