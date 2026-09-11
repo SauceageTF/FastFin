@@ -62,16 +62,7 @@ struct HomeView: View {
             }
         }
         .navigationBarHidden(true)
-        .navigationDestination(for: AppRoute.self) { route in
-            switch route {
-            case let .item(itemID):
-                ItemDetailView(itemID: itemID)
-            case let .season(seriesID, seasonID, seasonName):
-                SeasonEpisodesView(seriesID: seriesID, seasonID: seasonID, seasonName: seasonName)
-            case let .player(itemID):
-                PlayerContainerView(itemID: itemID)
-            }
-        }
+        .appRouteDestinations()
         .task { await load() }
     }
 

@@ -19,6 +19,38 @@ enum MediaService {
         return result.items ?? []
     }
 
+    /// Every item in one library, mirrors `getItems` in jellyfinClient.ts
+    /// (there `get_items` fetches the whole library in one call; same
+    /// simplification here rather than building out paging for a v1).
+    static func items(session: JellyfinSession, libraryID: String, limit: Int = 500) async throws -> [BaseItemDto] {
+        guard let client = session.client, let userID = session.userID else { return [] }
+        let parameters = Paths.GetItemsParameters(
+            userID: userID,
+            limit: limit,
+            isRecursive: true,
+            parentID: libraryID,
+            includeItemTypes: [.movie, .series],
+            sortBy: [.sortName]
+        )
+        let result = try await client.send(Paths.getItems(parameters: parameters)).value
+        return result.items ?? []
+    }
+
+    /// Search across every library. Used by `SearchView`.
+    static func search(session: JellyfinSession, query: String, limit: Int = 50) async throws -> [BaseItemDto] {
+        guard let client = session.client, let userID = session.userID, !query.isEmpty else { return [] }
+        let parameters = Paths.GetItemsParameters(
+            userID: userID,
+            limit: limit,
+            isRecursive: true,
+            searchTerm: query,
+            includeItemTypes: [.movie, .series, .episode],
+            sortBy: [.sortName]
+        )
+        let result = try await client.send(Paths.getItems(parameters: parameters)).value
+        return result.items ?? []
+    }
+
     static func latestItems(session: JellyfinSession, libraryID: String, limit: Int = 16) async throws -> [BaseItemDto] {
         guard let client = session.client, let userID = session.userID else { return [] }
         let parameters = Paths.GetLatestMediaParameters(userID: userID, parentID: libraryID, limit: limit)
