@@ -12,6 +12,11 @@ struct HomeView: View {
     @State private var libraryItems: [String: [BaseItemDto]] = [:]
     @State private var continueWatching: [BaseItemDto] = []
     @State private var featured: BaseItemDto?
+    /// The series itself when `featured` is an episode -- an episode's own
+    /// logo/name is almost never set, and showing its (often long, spoiler-y)
+    /// episode title in place of the show's own logo/wordmark is exactly the
+    /// "ortur's Mort" text that turned out to just be an episode name.
+    @State private var heroTitleItem: BaseItemDto?
     @State private var isLoading = true
     @State private var errorMessage: String?
 
@@ -83,12 +88,26 @@ struct HomeView: View {
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
                 if let featured, let backdrop = MediaService.backdropURL(session: session, itemID: featured.backdropSourceID ?? featured.id ?? "") {
-                    RemoteImage(url: backdrop)
+                    // Series aren't directly playable (same reasoning as the
+                    // primary button below) -- tapping the backdrop for one
+                    // opens its detail page instead of trying to play a
+                    // non-playable series ID.
+                    if featured.type == .series {
+                        NavigationLink(value: AppRoute.item(featured.id ?? "")) {
+                            RemoteImage(url: backdrop)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        RemoteImage(url: backdrop)
+                            .contentShape(Rectangle())
+                            .onTapGesture { playerPresenter.play(featured.id ?? "") }
+                    }
                 } else {
                     Theme.backgroundElevated
                 }
 
                 LinearGradient(colors: [.clear, Theme.background], startPoint: .init(x: 0.5, y: 0.3), endPoint: .bottom)
+                    .allowsHitTesting(false)
 
                 topBar
                     .padding(.horizontal, 18)
@@ -96,7 +115,7 @@ struct HomeView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
 
                 if let featured {
-                    heroContent(for: featured)
+                    heroContent(for: featured, titleItem: heroTitleItem ?? featured)
                         .padding(18)
                 }
             }
@@ -117,9 +136,9 @@ struct HomeView: View {
     }
 
     @ViewBuilder
-    private func heroContent(for item: BaseItemDto) -> some View {
+    private func heroContent(for item: BaseItemDto, titleItem: BaseItemDto) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if item.hasLogo, let logoURL = MediaService.logoURL(session: session, itemID: item.id ?? "") {
+            if titleItem.hasLogo, let logoURL = MediaService.logoURL(session: session, itemID: titleItem.id ?? "") {
                 AsyncImage(url: logoURL) { phase in
                     if case let .success(image) = phase {
                         image.resizable().aspectRatio(contentMode: .fit)
@@ -129,7 +148,7 @@ struct HomeView: View {
                     }
                 }
             } else {
-                Text(item.name ?? "")
+                Text(titleItem.name ?? "")
                     .font(Theme.displayFont(28, weight: .heavy))
                     .foregroundStyle(Theme.text)
                     .lineLimit(2)
@@ -209,6 +228,10 @@ struct HomeView: View {
                 if featured == nil, let first = items.first {
                     featured = first
                 }
+            }
+
+            if let featured, featured.type == .episode, let seriesID = featured.seriesID {
+                heroTitleItem = try? await MediaService.item(session: session, id: seriesID)
             }
         } catch {
             errorMessage = "Couldn't load your library: \(error.localizedDescription)"
