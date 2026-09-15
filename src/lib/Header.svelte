@@ -3,6 +3,13 @@
   import { logout, getLibraries, getPlaylists } from "$lib/jellyfinClient";
   import { isLoggedIn } from "$lib/session";
   import { themeColor, type ThemeColor } from "$lib/theme";
+  import {
+    LANGUAGE_OPTIONS,
+    getPreferredAudio,
+    setPreferredAudio,
+    getPreferredSubtitle,
+    setPreferredSubtitle,
+  } from "$lib/prefs";
   import type { Library, Item } from "$lib/types";
 
   const themeOptions: { value: ThemeColor; label: string; swatch: string }[] = [
@@ -17,6 +24,21 @@
   let libraries = $state<Library[]>([]);
   let playlists = $state<Item[]>([]);
   let sidebarError = $state("");
+
+  // Playback language preferences -- read by the player HUD when a new file's
+  // tracks are known (see the HUD's applyLanguagePreferences).
+  let prefAudio = $state(getPreferredAudio());
+  let prefSubtitle = $state(getPreferredSubtitle());
+
+  function changeAudio(event: Event) {
+    prefAudio = (event.target as HTMLSelectElement).value;
+    setPreferredAudio(prefAudio);
+  }
+
+  function changeSubtitle(event: Event) {
+    prefSubtitle = (event.target as HTMLSelectElement).value;
+    setPreferredSubtitle(prefSubtitle);
+  }
 
   async function toggleSidebar() {
     settingsOpen = false;
@@ -62,6 +84,12 @@
     <a class="home-link" href="/library">Home</a>
   </div>
   <div class="right">
+    <a class="icon-btn" href="/search" title="Search" aria-label="Search">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"></circle>
+        <line x1="21" y1="21" x2="16.2" y2="16.2"></line>
+      </svg>
+    </a>
     <button class="icon-btn" onclick={toggleSettings} title="Settings" aria-label="Toggle settings">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
@@ -91,6 +119,36 @@
               <span class="dot" style={`background:${option.swatch}`}></span>
             </button>
           {/each}
+        </div>
+
+        <div class="popover-label spaced">Preferred Audio</div>
+        <select class="pref" value={prefAudio} onchange={changeAudio}>
+          <option value="">Default</option>
+          {#each LANGUAGE_OPTIONS as lang (lang.code)}
+            <option value={lang.code}>{lang.label}</option>
+          {/each}
+        </select>
+
+        <div class="popover-label spaced">Preferred Subtitles</div>
+        <select class="pref" value={prefSubtitle} onchange={changeSubtitle}>
+          <option value="">Default</option>
+          <option value="off">Off</option>
+          {#each LANGUAGE_OPTIONS as lang (lang.code)}
+            <option value={lang.code}>{lang.label}</option>
+          {/each}
+        </select>
+
+        <div class="shortcuts">
+          <div class="popover-label spaced">Shortcuts</div>
+          <div class="shortcut"><kbd>/</kbd><span>Search</span></div>
+          <div class="shortcut"><kbd>Esc</kbd><span>Back</span></div>
+          <div class="shortcut"><kbd>Space</kbd><span>Play / pause</span></div>
+          <div class="shortcut"><kbd>&larr;</kbd><kbd>&rarr;</kbd><span>Seek 10s</span></div>
+          <div class="shortcut"><kbd>&uarr;</kbd><kbd>&darr;</kbd><span>Volume</span></div>
+          <div class="shortcut"><kbd>M</kbd><span>Mute</span></div>
+          <div class="shortcut"><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="shortcut"><kbd>S</kbd><span>Skip intro</span></div>
+          <div class="shortcut"><kbd>N</kbd><span>Next episode</span></div>
         </div>
       </div>
     {/if}
@@ -167,7 +225,7 @@
   .home-link {
     color: var(--text);
     text-decoration: none;
-    font-size: 14px;
+    font-size: 0.875rem;
     font-weight: 600;
   }
 
@@ -209,7 +267,7 @@
   }
 
   .popover-label {
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: 700;
     color: var(--text-dim);
     margin-bottom: 10px;
@@ -218,6 +276,60 @@
   .swatches {
     display: flex;
     gap: 10px;
+  }
+
+  .popover-label.spaced {
+    margin-top: 16px;
+  }
+
+  .pref {
+    width: 100%;
+    min-width: 200px;
+    padding: 7px 10px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+  }
+
+  .pref:focus {
+    border-color: var(--accent);
+  }
+
+  .shortcuts {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .shortcut {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .shortcut span {
+    margin-left: 4px;
+  }
+
+  kbd {
+    display: inline-block;
+    min-width: 22px;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-align: center;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
   }
 
   .swatch {
@@ -278,7 +390,7 @@
   }
 
   .section h3 {
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -292,7 +404,7 @@
     border-radius: 8px;
     color: var(--text);
     text-decoration: none;
-    font-size: 14px;
+    font-size: 0.875rem;
     font-weight: 600;
   }
 
@@ -302,6 +414,6 @@
 
   .dim {
     color: var(--text-dim);
-    font-size: 13px;
+    font-size: 0.8125rem;
   }
 </style>

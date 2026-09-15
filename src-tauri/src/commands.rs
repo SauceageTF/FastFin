@@ -141,6 +141,12 @@ pub async fn get_seasons(state: State<'_, AppState>, series_id: String) -> Resul
 }
 
 #[tauri::command]
+pub async fn get_series_episodes(state: State<'_, AppState>, series_id: String) -> Result<Vec<Item>, String> {
+    let session = require_session(&state)?;
+    jellyfin::get_series_episodes(&session, &series_id).await
+}
+
+#[tauri::command]
 pub async fn get_episodes(
     state: State<'_, AppState>,
     series_id: String,
@@ -160,6 +166,36 @@ pub async fn get_playlists(state: State<'_, AppState>) -> Result<Vec<Item>, Stri
 pub async fn get_resume(state: State<'_, AppState>) -> Result<Vec<Item>, String> {
     let session = require_session(&state)?;
     jellyfin::get_resume(&session).await
+}
+
+#[tauri::command]
+pub async fn search_items(state: State<'_, AppState>, term: String) -> Result<Vec<Item>, String> {
+    let session = require_session(&state)?;
+    jellyfin::search_items(&session, &term).await
+}
+
+#[tauri::command]
+pub async fn get_next_up(state: State<'_, AppState>, series_id: Option<String>) -> Result<Vec<Item>, String> {
+    let session = require_session(&state)?;
+    jellyfin::get_next_up(&session, series_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn get_next_episode(state: State<'_, AppState>, episode_id: String) -> Result<Option<Item>, String> {
+    let session = require_session(&state)?;
+    jellyfin::get_next_episode(&session, &episode_id).await
+}
+
+#[tauri::command]
+pub async fn set_played(state: State<'_, AppState>, item_id: String, played: bool) -> Result<(), String> {
+    let session = require_session(&state)?;
+    jellyfin::set_played(&session, &item_id, played).await
+}
+
+#[tauri::command]
+pub async fn get_skip_segments(state: State<'_, AppState>, item_id: String) -> Result<Vec<jellyfin::SkipSegment>, String> {
+    let session = require_session(&state)?;
+    Ok(jellyfin::get_skip_segments(&session, &item_id).await)
 }
 
 #[tauri::command]
@@ -352,6 +388,17 @@ pub async fn stop_playback(app: AppHandle, state: State<'_, AppState>) -> Result
 pub async fn go_back_to_item(app: AppHandle, state: State<'_, AppState>, item_id: String) -> Result<(), String> {
     cleanup_playback(&app, &state);
     let _ = app.emit_to("main", "player://navigate-back", item_id);
+    Ok(())
+}
+
+/// Switches playback to another item (autoplay-next, the HUD's episode
+/// picker). Like `go_back_to_item`, this is called from the HUD window, which
+/// has its own router and can't navigate `main` directly -- so it asks
+/// `main` to go to the new player route, whose `start_playback` then tears
+/// this playback (HUD window included) down and starts the next one.
+#[tauri::command]
+pub fn play_item(app: AppHandle, item_id: String) -> Result<(), String> {
+    let _ = app.emit_to("main", "player://play", item_id);
     Ok(())
 }
 

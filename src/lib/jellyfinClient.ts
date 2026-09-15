@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Library, Item, Track } from "./types";
+import type { Library, Item, Track, SkipSegment } from "./types";
 
 interface SessionInfo {
   serverUrl: string;
@@ -59,6 +59,11 @@ export async function getResume(): Promise<Item[]> {
   return invoke("get_resume");
 }
 
+/** Title search for movies and series only -- never individual episodes. */
+export async function searchItems(term: string): Promise<Item[]> {
+  return invoke("search_items", { term });
+}
+
 export async function getBackdropUrl(itemId: string, maxWidth = 1920): Promise<string> {
   const { serverUrl, accessToken } = await sessionInfo();
   // Backdrop images are a per-item array in Jellyfin (unlike Primary), so
@@ -69,6 +74,15 @@ export async function getBackdropUrl(itemId: string, maxWidth = 1920): Promise<s
   // so this cuts both transfer time and the decoded bitmap's footprint in
   // the webview's memory.
   return `${serverUrl}/Items/${itemId}/Images/Backdrop/0?api_key=${accessToken}&maxWidth=${maxWidth}`;
+}
+
+// Jellyfin's "Thumb" image is a dedicated landscape (16:9) still, distinct
+// from both the portrait Primary poster and the full-width Backdrop. Only
+// call this once you know the item has one (`item.ImageTags?.Thumb`) --
+// like Logo, it 404s rather than falling back when missing.
+export async function getThumbUrl(itemId: string, maxWidth = 800): Promise<string> {
+  const { serverUrl, accessToken } = await sessionInfo();
+  return `${serverUrl}/Items/${itemId}/Images/Thumb?api_key=${accessToken}&maxWidth=${maxWidth}`;
 }
 
 // Only call this once you know the item actually has a Logo image (check
@@ -85,6 +99,11 @@ export async function getSeasons(seriesId: string): Promise<Item[]> {
 
 export async function getEpisodes(seriesId: string, seasonId: string): Promise<Item[]> {
   return invoke("get_episodes", { seriesId, seasonId });
+}
+
+/** Every episode of a series across all seasons. */
+export async function getSeriesEpisodes(seriesId: string): Promise<Item[]> {
+  return invoke("get_series_episodes", { seriesId });
 }
 
 export async function getImageUrl(itemId: string, maxWidth = 480): Promise<string> {
@@ -153,4 +172,30 @@ export async function mpvSetSubtitleTrack(trackId: number | null): Promise<void>
 
 export async function mpvSetAudioTrack(trackId: number): Promise<void> {
   await invoke("mpv_set_audio_track", { trackId });
+}
+
+/** Jellyfin's "Next Up" -- the next unwatched episode per started series,
+ * or, with `seriesId`, just that show's next episode (S1E1 if unstarted). */
+export async function getNextUp(seriesId?: string): Promise<Item[]> {
+  return invoke("get_next_up", { seriesId: seriesId ?? null });
+}
+
+/** The episode after `episodeId` in running order, or null at the end of the show. */
+export async function getNextEpisode(episodeId: string): Promise<Item | null> {
+  return invoke("get_next_episode", { episodeId });
+}
+
+export async function setPlayed(itemId: string, played: boolean): Promise<void> {
+  return invoke("set_played", { itemId, played });
+}
+
+/** Intro/credits segments from Intro Skipper (or Jellyfin's native media
+ * segments). Empty when neither is available -- never throws. */
+export async function getSkipSegments(itemId: string): Promise<SkipSegment[]> {
+  return invoke("get_skip_segments", { itemId }).catch(() => []) as Promise<SkipSegment[]>;
+}
+
+/** From the HUD window: asks `main` to switch playback to another item. */
+export async function playItem(itemId: string): Promise<void> {
+  return invoke("play_item", { itemId });
 }
