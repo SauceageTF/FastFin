@@ -124,6 +124,15 @@ pub fn create_hud_window(app: &AppHandle, item_id: &str, host_hwnd: isize) -> Re
         .skip_taskbar(true)
         .resizable(false)
         .focused(false)
+        // `focused(false)` only stops this window from taking focus when it's
+        // first shown -- it's still activatable, so any click on its chrome
+        // (pause, seek, ...) would activate it and deactivate `main`, whose
+        // `Focused(false)` handler in lib.rs then hides this window. Nothing
+        // could bring it back either: the mouse then lands on mpv's host
+        // window, which is WS_EX_NOACTIVATE, so `main` never regains focus
+        // until an Alt+Tab. Non-focusable (WS_EX_NOACTIVATE) still receives
+        // mouse input fine; it just never steals activation from `main`.
+        .focusable(false)
         .visible(true)
         .build()
         .map_err(|e| e.to_string())?;
@@ -484,7 +493,7 @@ pub async fn connect_ipc(
     let pipe = client.ok_or_else(|| format!("Could not connect to mpv IPC pipe: {last_err}"))?;
     let (reader_half, mut writer_half) = tokio::io::split(pipe);
 
-    for prop in ["time-pos", "duration", "pause"] {
+    for prop in ["time-pos", "duration", "pause", "eof-reached"] {
         let cmd = serde_json::json!({ "command": ["observe_property", 1, prop] });
         let _ = writer_half.write_all(format!("{}\n", cmd).as_bytes()).await;
     }
