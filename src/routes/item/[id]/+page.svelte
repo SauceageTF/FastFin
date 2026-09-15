@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import { goto } from "$app/navigation";
   import Header from "$lib/Header.svelte";
   import Carousel from "$lib/Carousel.svelte";
   import {
@@ -8,9 +9,13 @@
     getBackdropUrl,
     getSeasons,
     getEpisodes,
+    getSeriesEpisodes,
+    getNextUp,
     getSimilarItems,
   } from "$lib/jellyfinClient";
-  import { backdropSourceId, type Item } from "$lib/types";
+  import { backdropSourceId, episodeCode, type Item } from "$lib/types";
+  import WatchedOverlay from "$lib/WatchedOverlay.svelte";
+  import { openItemMenu } from "$lib/contextMenu";
 
   let item = $state<Item | null>(null);
   let imageUrl = $state("");
@@ -24,12 +29,46 @@
   // `loading` only covers the core info, and each of these loads
   // independently afterward.
   let seasons = $state<Item[] | null>(null);
+  let seasonImages = $state<Record<string, string>>({});
   let nextEpisodes = $state<Item[] | null>(null);
   let nextEpisodeImages = $state<Record<string, string>>({});
   let similarItems = $state<Item[] | null>(null);
   let similarImages = $state<Record<string, string>>({});
   let error = $state("");
   let loading = $state(true);
+  // The series' "Continue" target: the next unwatched episode (or S1E1 for
+  // a show that's never been started). null while loading, undefined once
+  // known to have nothing (fully watched show).
+  let nextUpEpisode = $state<Item | null | undefined>(null);
+  let shuffling = $state(false);
+  let shuffleError = $state("");
+
+  // Picks a random episode across every season and jumps straight into
+  // playback. Specials (season 0) are left out -- they're rarely what
+  // someone wants from "play me anything" -- unless the show has nothing
+  // else. The episode list is fetched on click rather than up front since
+  // it can be hundreds of items for a long-running show and only this
+  // button ever needs it.
+  async function playRandomEpisode(seriesId: string) {
+    if (shuffling) return;
+    shuffling = true;
+    shuffleError = "";
+    try {
+      const all = await getSeriesEpisodes(seriesId);
+      const regular = all.filter((ep) => (ep.ParentIndexNumber ?? 1) !== 0);
+      const pool = regular.length > 0 ? regular : all;
+      if (pool.length === 0) {
+        shuffleError = "No episodes to pick from.";
+        return;
+      }
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      await goto(`/player/${pick.Id}`);
+    } catch (e) {
+      shuffleError = typeof e === "string" ? e : "Couldn't pick an episode";
+    } finally {
+      shuffling = false;
+    }
+  }
 
   function formatRuntime(ticks: number | null): string {
     if (!ticks) return "";
@@ -48,9 +87,11 @@
     imageUrl = "";
     backdropUrl = "";
     seasons = null;
+    seasonImages = {};
     nextEpisodes = null;
     nextEpisodeImages = {};
     similarItems = null;
+    nextUpEpisode = null;
     similarImages = {};
     error = "";
     loading = true;
@@ -66,8 +107,23 @@
       loading = false;
 
       if (loaded.Type === "Series") {
+        getNextUp(itemId)
+          .then((items) => (nextUpEpisode = items[0] ?? undefined))
+          .catch(() => (nextUpEpisode = undefined));
         getSeasons(itemId)
-          .then((s) => (seasons = s))
+          .then(async (s) => {
+            seasons = s;
+            // Seasons without their own artwork fall back to the series
+            // poster: Jellyfin won't substitute one on its own -- asking
+            // for a Primary image the season doesn't have just 404s.
+            const entries = await Promise.all(
+              s.map(async (season) => {
+                const url = season.ImageTags?.Primary ? await getImageUrl(season.Id) : imageUrl;
+                return [season.Id, url] as const;
+              }),
+            );
+            seasonImages = Object.fromEntries(entries);
+          })
           .catch(() => (seasons = []));
       } else if (loaded.Type === "Episode" && loaded.SeriesId && loaded.SeasonId) {
         getEpisodes(loaded.SeriesId, loaded.SeasonId)
@@ -155,7 +211,29 @@
             {/each}
           </div>
         {/if}
-        {#if item.Type !== "Series"}
+        {#if item.Type === "Series"}
+          <div class="actions">
+            {#if nextUpEpisode === null}
+              <div class="skeleton skel-btn"></div>
+            {:else if nextUpEpisode}
+              <a class="play" href={`/player/${nextUpEpisode.Id}`} title={nextUpEpisode.Name}>
+                &#9658; {nextUpEpisode.UserData?.PlaybackPositionTicks ? "Resume" : (nextUpEpisode.IndexNumber === 1 && (nextUpEpisode.ParentIndexNumber ?? 1) === 1 ? "Play" : "Continue")}
+                <span class="play-code">{episodeCode(nextUpEpisode)}</span>
+              </a>
+            {/if}
+          <button class="play shuffle secondary" onclick={() => playRandomEpisode(item!.Id)} disabled={shuffling}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 3 21 3 21 8"></polyline>
+              <line x1="4" y1="20" x2="21" y2="3"></line>
+              <polyline points="21 16 21 21 16 21"></polyline>
+              <line x1="15" y1="15" x2="21" y2="21"></line>
+              <line x1="4" y1="4" x2="9" y2="9"></line>
+            </svg>
+            {shuffling ? "Picking…" : "Random Episode"}
+          </button>
+          </div>
+          {#if shuffleError}<p class="error small">{shuffleError}</p>{/if}
+        {:else}
           <a class="play" href={`/player/${item.Id}`}>
             &#9658; {item.UserData?.PlaybackPositionTicks ? "Resume" : "Play"}
           </a>
@@ -174,19 +252,25 @@
         {#if seasons === null}
           <div class="skeleton-cards">
             {#each Array(4) as _}
-              <div class="skeleton skel-pill"></div>
+              <div class="skeleton season-thumb"></div>
             {/each}
           </div>
         {:else if seasons.length === 0}
           <p class="dim">No seasons found.</p>
         {:else}
-          <div class="seasons">
+          <Carousel>
             {#each seasons as season (season.Id)}
-              <a class="season" href={`/item/${item.Id}/season/${season.Id}`}>
-                {season.Name}
+              <a class="season-card" href={`/item/${item.Id}/season/${season.Id}`}>
+                {#if seasonImages[season.Id]}
+                  <img src={seasonImages[season.Id]} alt={season.Name} loading="lazy" />
+                {:else}
+                  <div class="skeleton season-thumb"></div>
+                {/if}
+                <span class="card-title">{season.Name}</span>
+                {#if season.ProductionYear}<span class="card-subtitle">{season.ProductionYear}</span>{/if}
               </a>
             {/each}
-          </div>
+          </Carousel>
         {/if}
       </section>
     {/if}
@@ -203,11 +287,12 @@
         {:else if nextEpisodes.length > 0}
           <Carousel>
             {#each nextEpisodes as ep (ep.Id)}
-              <a class="next-up-card" href={`/player/${ep.Id}`}>
+              <a class="next-up-card" href={`/player/${ep.Id}`} oncontextmenu={(e) => openItemMenu(e, ep)}>
                 <div class="next-up-thumb">
                   {#if nextEpisodeImages[ep.Id]}
                     <img src={nextEpisodeImages[ep.Id]} alt={ep.Name} loading="lazy" />
                   {/if}
+                  <WatchedOverlay item={ep} />
                 </div>
                 <span class="card-title">
                   {#if ep.IndexNumber}<span class="num">{ep.IndexNumber}.</span>{/if}
@@ -233,12 +318,15 @@
         {:else if similarItems.length > 0}
           <Carousel>
             {#each similarItems as si (si.Id)}
-              <a class="poster-card" href={`/item/${si.Id}`}>
-                {#if similarImages[si.Id]}
-                  <img src={similarImages[si.Id]} alt={si.Name} loading="lazy" />
-                {:else}
-                  <div class="skeleton poster-thumb"></div>
-                {/if}
+              <a class="poster-card" href={`/item/${si.Id}`} oncontextmenu={(e) => openItemMenu(e, si)}>
+                <div class="poster-frame">
+                  {#if similarImages[si.Id]}
+                    <img src={similarImages[si.Id]} alt={si.Name} loading="lazy" />
+                  {:else}
+                    <div class="skeleton poster-thumb"></div>
+                  {/if}
+                  <WatchedOverlay item={si} />
+                </div>
                 <span class="card-title">{si.Name}</span>
               </a>
             {/each}
@@ -391,6 +479,7 @@
   }
 
   .next-up-thumb {
+    position: relative;
     width: 260px;
     aspect-ratio: 16 / 9;
     border-radius: 8px;
@@ -426,11 +515,6 @@
     overflow: hidden;
   }
 
-  .skel-pill {
-    width: 120px;
-    height: 40px;
-    border-radius: 999px;
-  }
 
   .meta {
     display: flex;
@@ -497,6 +581,55 @@
     opacity: 0.85;
   }
 
+  .actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .actions .play {
+    margin-top: 0;
+  }
+
+  .play-code {
+    margin-left: 0.4rem;
+    opacity: 0.6;
+    font-weight: 600;
+  }
+
+  .skel-btn {
+    width: 140px;
+    height: 42px;
+    border-radius: 8px;
+  }
+
+  .shuffle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: none;
+    font-size: 1rem;
+    font-family: inherit;
+  }
+
+  .shuffle.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .shuffle:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .error.small {
+    margin: 0;
+    font-size: 0.85rem;
+  }
+
   .progress-track {
     width: 200px;
     height: 4px;
@@ -510,25 +643,28 @@
     background: var(--accent);
   }
 
-  .seasons {
+  .season-card {
+    flex-shrink: 0;
+    width: 220px;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
+    flex-direction: column;
+    gap: 0.4rem;
+    text-decoration: none;
+    color: var(--text);
   }
 
-  .season {
+  .season-card img,
+  .season-thumb {
+    width: 220px;
+    aspect-ratio: 2 / 3;
+    object-fit: cover;
+    border-radius: 8px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.6rem 1.1rem;
-    color: var(--text);
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 600;
   }
 
-  .season:hover {
-    border-color: var(--accent);
+  .season-card:hover img {
+    outline: 2px solid var(--accent);
   }
 
   .similar-section {
@@ -550,8 +686,16 @@
     color: var(--text);
   }
 
+  .poster-frame {
+    position: relative;
+    width: 200px;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
   .poster-card img,
   .poster-thumb {
+    display: block;
     width: 200px;
     aspect-ratio: 2 / 3;
     object-fit: cover;
@@ -565,7 +709,7 @@
   }
 
   .card-title {
-    font-size: 13px;
+    font-size: 0.8125rem;
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;

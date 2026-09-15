@@ -2,8 +2,19 @@
   import { onMount } from "svelte";
   import Header from "$lib/Header.svelte";
   import Carousel from "$lib/Carousel.svelte";
-  import { getLibraries, getLatestItems, getResume, getImageUrl, getBackdropUrl, getLogoUrl } from "$lib/jellyfinClient";
-  import { backdropSourceId, hasLogo, type Library, type Item } from "$lib/types";
+  import WatchedOverlay from "$lib/WatchedOverlay.svelte";
+  import { openItemMenu } from "$lib/contextMenu";
+  import {
+    getLibraries,
+    getLatestItems,
+    getResume,
+    getNextUp,
+    getImageUrl,
+    getBackdropUrl,
+    getThumbUrl,
+    getLogoUrl,
+  } from "$lib/jellyfinClient";
+  import { backdropSourceId, hasLogo, episodeCode, type Library, type Item } from "$lib/types";
 
   // `items: null` means that row hasn't resolved yet (shown as a skeleton);
   // `[]` means it resolved but the library is empty (hidden entirely). Rows
@@ -15,8 +26,10 @@
   type RowState = { library: Library; items: Item[] | null };
 
   let continueWatching = $state<Item[] | null>(null);
+  let nextUp = $state<Item[] | null>(null);
   let rows = $state<RowState[]>([]);
   let images = $state<Record<string, string>>({});
+  let wideImages = $state<Record<string, string>>({});
   let featured = $state<Item | null>(null);
   let featuredReady = $state(false);
   let featuredBackdrop = $state("");
@@ -52,12 +65,38 @@
     });
   }
 
-  async function loadImagesFor(items: Item[]) {
+  // The Continue Watching cards are 16:9. An episode's Primary image is
+  // already a landscape still, but a movie's Primary is its portrait poster,
+  // which looks wrong cropped into a wide card -- so movies use their
+  // landscape Thumb art when they have one, else their backdrop, and only
+  // fall back to the poster when neither exists.
+  function wideCardImageUrl(item: Item): Promise<string> {
+    if (item.Type === "Episode") return getImageUrl(item.Id);
+    if (item.ImageTags?.Thumb) return getThumbUrl(item.Id);
+    const backdropId = backdropSourceId(item);
+    if (backdropId) return getBackdropUrl(backdropId, 800);
+    return getImageUrl(item.Id);
+  }
+
+  async function resolveAndPreload(items: Item[], pickUrl: (item: Item) => Promise<string>) {
     const entries = await Promise.all(
-      items.map(async (item) => [item.Id, await getImageUrl(item.Id)] as const),
+      items.map(async (item) => [item.Id, await pickUrl(item)] as const),
     );
     await Promise.all(entries.map(([, url]) => preloadImage(url)));
-    images = { ...images, ...Object.fromEntries(entries) };
+    return Object.fromEntries(entries);
+  }
+
+  async function loadImagesFor(items: Item[]) {
+    const loaded = await resolveAndPreload(items, (item) => getImageUrl(item.Id));
+    images = { ...images, ...loaded };
+  }
+
+  // Kept separate from `images`: both maps are keyed by item id, and a movie
+  // can sit in Continue Watching *and* a Recently Added row at once, where it
+  // needs a landscape image in one and its poster in the other.
+  async function loadWideImagesFor(items: Item[]) {
+    const loaded = await resolveAndPreload(items, wideCardImageUrl);
+    wideImages = { ...wideImages, ...loaded };
   }
 
   async function fetchRowItems(index: number): Promise<Item[]> {
@@ -129,7 +168,7 @@
       if (resumeItems.length > 0) {
         continueWatching = resumeItems;
         await setFeatured(resumeItems[0]);
-        await loadImagesFor(resumeItems);
+        await loadWideImagesFor(resumeItems);
       } else {
         continueWatching = [];
         if (rows.length > 0) {
@@ -144,6 +183,19 @@
       rows.forEach((row, i) => {
         if (row.items === null) loadRow(i);
       });
+
+      // Next Up (the next unwatched episode of every show in progress) is
+      // distinct from Continue Watching (half-finished items) but can
+      // overlap with it -- a half-watched episode is also that show's next
+      // unwatched one -- so anything already in the row above is dropped.
+      getNextUp()
+        .then(async (items) => {
+          const seen = new Set((continueWatching ?? []).map((i) => i.Id));
+          const fresh = items.filter((i) => !seen.has(i.Id));
+          nextUp = fresh;
+          if (fresh.length > 0) await loadWideImagesFor(fresh);
+        })
+        .catch(() => (nextUp = []));
     } catch (e) {
       error = typeof e === "string" ? e : "Failed to load your library";
     }
@@ -208,20 +260,37 @@
           <h2>Continue Watching</h2>
           <Carousel>
             {#each continueWatching as item (item.Id)}
-              <a class="wide-card" href={`/player/${item.Id}`}>
+              <a class="wide-card" href={`/player/${item.Id}`} oncontextmenu={(e) => openItemMenu(e, item)}>
                 <div class="wide-thumb">
-                  {#if images[item.Id]}
-                    <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                  {#if wideImages[item.Id]}
+                    <img src={wideImages[item.Id]} alt={item.Name} loading="lazy" />
                   {/if}
-                  {#if item.UserData?.PlayedPercentage}
-                    <div class="progress-track">
-                      <div class="progress-fill" style={`width:${item.UserData.PlayedPercentage}%`}></div>
-                    </div>
-                  {/if}
+                  <WatchedOverlay {item} />
                 </div>
                 <span class="card-title">
                   {item.SeriesName ?? item.Name}
                   {#if item.SeriesName}<span class="dim"> &middot; {item.Name}</span>{/if}
+                </span>
+              </a>
+            {/each}
+          </Carousel>
+        </section>
+      {/if}
+
+      {#if nextUp && nextUp.length > 0}
+        <section class="row">
+          <h2>Next Up</h2>
+          <Carousel>
+            {#each nextUp as item (item.Id)}
+              <a class="wide-card" href={`/player/${item.Id}`} oncontextmenu={(e) => openItemMenu(e, item)}>
+                <div class="wide-thumb">
+                  {#if wideImages[item.Id]}
+                    <img src={wideImages[item.Id]} alt={item.Name} loading="lazy" />
+                  {/if}
+                </div>
+                <span class="card-title">
+                  {item.SeriesName ?? item.Name}
+                  {#if item.SeriesName}<span class="dim"> &middot; {episodeCode(item)} {item.Name}</span>{/if}
                 </span>
               </a>
             {/each}
@@ -247,12 +316,15 @@
             </div>
             <Carousel>
               {#each row.items as item (item.Id)}
-                <a class="poster-card" href={`/item/${item.Id}`}>
-                  {#if images[item.Id]}
-                    <img src={images[item.Id]} alt={item.Name} loading="lazy" />
-                  {:else}
-                    <div class="skeleton poster-thumb"></div>
-                  {/if}
+                <a class="poster-card" href={`/item/${item.Id}`} oncontextmenu={(e) => openItemMenu(e, item)}>
+                  <div class="poster-frame">
+                    {#if images[item.Id]}
+                      <img src={images[item.Id]} alt={item.Name} loading="lazy" />
+                    {:else}
+                      <div class="skeleton poster-thumb"></div>
+                    {/if}
+                    <WatchedOverlay {item} />
+                  </div>
                   <span class="card-title">{item.Name}</span>
                 </a>
               {/each}
@@ -293,12 +365,29 @@
     border-radius: 0;
   }
 
+  /* Backdrops are 16:9 but the hero is much wider than that (full width,
+     82vh tall -- ~2.2:1 on a 16:9 window), so stretching the image to cover
+     it used to crop ~18% of its height, and since `cover` crops from the
+     center that took heads off the top. Instead the image keeps its natural
+     aspect at full hero height and sits flush right, so nothing is cropped
+     on any window at least as wide as 16:9; the strip it leaves on the left
+     is page background, which is where the title/overview go anyway, and
+     the mask below fades the image's left edge into it so there's no seam.
+     Only a narrower-than-16:9 window (rare for a desktop app) makes the
+     image wider than the hero -- `max-width` then clamps it and `cover`
+     crops, anchored to the top so it's the bottom (already fading into the
+     page) that gives, never faces. */
   .hero-image {
     position: absolute;
-    inset: 0;
-    width: 100%;
+    top: 0;
+    right: 0;
     height: 100%;
+    width: auto;
+    max-width: 100%;
     object-fit: cover;
+    object-position: center top;
+    mask-image: linear-gradient(90deg, transparent, #000 40%);
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 40%);
   }
 
   .hero-scrim {
@@ -310,13 +399,15 @@
     background: linear-gradient(180deg, transparent, var(--bg) 92%);
   }
 
+  /* Text legibility only -- the image's own left-edge fade (see
+     .hero-image) is what does the blending into the page background. */
   .hero-scrim-side {
     position: absolute;
     top: 0;
     bottom: 0;
     left: 0;
     width: 55%;
-    background: linear-gradient(90deg, rgba(10, 10, 14, 0.55), transparent);
+    background: linear-gradient(90deg, rgba(10, 10, 14, 0.7), transparent);
   }
 
   .hero-content {
@@ -329,7 +420,7 @@
   .hero-content h1 {
     font-family: var(--font-display);
     font-weight: 800;
-    font-size: 64px;
+    font-size: 4rem;
     line-height: 1.02;
     margin: 0 0 20px;
   }
@@ -349,13 +440,13 @@
     display: flex;
     gap: 14px;
     color: var(--text-dim);
-    font-size: 14px;
+    font-size: 0.875rem;
     font-weight: 600;
     margin: 0 0 16px;
   }
 
   .hero-overview {
-    font-size: 16px;
+    font-size: 1rem;
     line-height: 1.65;
     color: #c7c5d0;
     margin: 0 0 28px;
@@ -373,7 +464,7 @@
     gap: 8px;
     border-radius: 6px;
     padding: 12px 24px;
-    font-size: 14px;
+    font-size: 0.875rem;
     font-weight: 700;
     text-decoration: none;
   }
@@ -406,7 +497,7 @@
 
   .row h2 {
     font-family: var(--font-display);
-    font-size: 18px;
+    font-size: 1.125rem;
     font-weight: 700;
     margin: 0 0 14px;
   }
@@ -424,7 +515,7 @@
   }
 
   .see-all {
-    font-size: 13px;
+    font-size: 0.8125rem;
     color: var(--text-dim);
     text-decoration: none;
   }
@@ -443,8 +534,16 @@
     color: var(--text);
   }
 
+  .poster-frame {
+    position: relative;
+    width: 230px;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
   .poster-card img,
   .poster-thumb {
+    display: block;
     width: 230px;
     aspect-ratio: 2 / 3;
     object-fit: cover;
@@ -487,22 +586,8 @@
     outline: 2px solid var(--accent);
   }
 
-  .progress-track {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-  }
-
   .card-title {
-    font-size: 13px;
+    font-size: 0.8125rem;
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;

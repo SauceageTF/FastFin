@@ -4,6 +4,8 @@
   import Header from "$lib/Header.svelte";
   import { getEpisodes, getImageUrl } from "$lib/jellyfinClient";
   import type { Item } from "$lib/types";
+  import WatchedOverlay from "$lib/WatchedOverlay.svelte";
+  import { openItemMenu } from "$lib/contextMenu";
 
   let episodes = $state<Item[] | null>(null);
   let images = $state<Record<string, string>>({});
@@ -55,12 +57,15 @@
   {:else}
     <div class="list">
       {#each episodes as ep (ep.Id)}
-        <a class="row" href={`/player/${ep.Id}`}>
-          {#if images[ep.Id]}
-            <img src={images[ep.Id]} alt={ep.Name} loading="lazy" />
-          {:else}
-            <div class="skeleton row-thumb"></div>
-          {/if}
+        <a class="row" class:watched={ep.UserData?.Played} href={`/player/${ep.Id}`} oncontextmenu={(e) => openItemMenu(e, ep)}>
+          <div class="thumb-frame">
+            {#if images[ep.Id]}
+              <img src={images[ep.Id]} alt={ep.Name} loading="lazy" />
+            {:else}
+              <div class="skeleton row-thumb"></div>
+            {/if}
+            <WatchedOverlay item={ep} />
+          </div>
           <div class="row-info">
             <span class="title">
               {#if ep.IndexNumber}<span class="num">{ep.IndexNumber}.</span>{/if}
@@ -109,8 +114,27 @@
     background: var(--bg-hover);
   }
 
+  .thumb-frame {
+    position: relative;
+    width: 160px;
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  /* Watched episodes are dimmed so the unwatched ones stand out when
+     scanning down a season. */
+  .row.watched img {
+    opacity: 0.55;
+  }
+
+  .row.watched:hover img {
+    opacity: 0.8;
+  }
+
   .row img,
   .row-thumb {
+    display: block;
     width: 160px;
     aspect-ratio: 16 / 9;
     object-fit: cover;
