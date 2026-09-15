@@ -9,3 +9,9 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# iOS development (native Swift attempt + Expo/React Native app) --
+# kept locally, not tracked in this repo
+/ios
+/mobile
+/.github/workflows/ios-build.yml
