@@ -14,8 +14,20 @@
     toggleMainFullscreen,
     enterPip,
     restoreFromPip,
+    getItem,
+    getEpisodes,
+    getNextEpisode,
+    getSkipSegments,
+    playItem,
   } from "$lib/jellyfinClient";
-  import type { Track } from "$lib/types";
+  import { episodeCode, type Item, type SkipSegment, type Track } from "$lib/types";
+  import {
+    getVolume as loadStoredVolume,
+    setVolume as storeVolume,
+    getPreferredAudio,
+    getPreferredSubtitle,
+    languageMatches,
+  } from "$lib/prefs";
 
   // This page renders in its own always-on-top, transparent Tauri window
   // (see create_hud_window's doc comment in the Rust backend) that sits
@@ -32,14 +44,17 @@
   let timePos = $state(0);
   let duration = $state(0);
   let volume = $state(100);
+  // Volume to restore when unmuting (M key). 0 = not muted.
+  let volumeBeforeMute = 0;
 
   let audioTracks = $state<Track[]>([]);
   let subtitleTracks = $state<Track[]>([]);
   let selectedAudioId = $state<number | null>(null);
   let selectedSubtitleId = $state<number | null>(null);
-  // Which track picker (if any) is open. Floating dropdown, anchored to its
-  // trigger button -- see the "menu" styles below.
-  let activePanel = $state<"none" | "audio" | "captions">("none");
+  // Which panel (if any) is open. The track pickers are floating dropdowns
+  // anchored to their trigger button; the episode picker is a taller list
+  // in the same style -- see the "menu" styles below.
+  let activePanel = $state<"none" | "audio" | "captions" | "episodes">("none");
   let isFullscreen = $state(false);
 
   // Whether the top bar / control bar are shown. Auto-hides after
@@ -47,8 +62,11 @@
   let hudVisible = $state(true);
   let hudTimer: ReturnType<typeof setTimeout> | undefined;
   const HUD_HIDE_DELAY_MS = 4000;
+  const SEEK_STEP_S = 10;
+  const VOLUME_STEP = 5;
 
   let unlistenProperty: UnlistenFn | undefined;
+  let unlistenKeydown: UnlistenFn | undefined;
   let seeking = false;
 
   // Whether this window is currently the small floating PiP overlay rather
@@ -57,6 +75,37 @@
   // the layout switch and the window's actual size change stay in lockstep.
   let pipMode = $state(false);
   let unlistenPip: UnlistenFn | undefined;
+
+  // What's playing. Only episodes get the next-episode / episode-picker /
+  // skip-segment machinery below; for a movie these all stay empty.
+  let currentItem = $state<Item | null>(null);
+  let nextEpisode = $state<Item | null>(null);
+  let seasonEpisodes = $state<Item[] | null>(null);
+  let episodesError = $state("");
+
+  // Intro Skipper (or native media segment) ranges for this item, in
+  // seconds. Empty when the plugin isn't installed or hasn't analyzed the
+  // episode yet -- then no skip button ever shows, which is the right
+  // fallback.
+  let segments = $state<SkipSegment[]>([]);
+  let activeSegment = $derived(
+    segments.find((s) => timePos >= s.start && timePos < s.end - 0.5) ?? null,
+  );
+  let skippableSegment = $derived(
+    activeSegment && activeSegment.kind !== "Credits" ? activeSegment : null,
+  );
+  let inCredits = $derived(activeSegment?.kind === "Credits");
+  let eofReached = $state(false);
+
+  // Autoplay-next card: appears when the credits segment starts (or, without
+  // credits data, when the file actually ends), counts down, then plays the
+  // next episode. Cancelling keeps it hidden for the rest of this episode.
+  const UP_NEXT_SECONDS = 10;
+  let upNextVisible = $state(false);
+  let upNextDismissed = $state(false);
+  let countdown = $state(UP_NEXT_SECONDS);
+  let countdownTimer: ReturnType<typeof setInterval> | undefined;
+  let switching = false;
 
   function resetHudTimer() {
     hudVisible = true;
@@ -67,6 +116,34 @@
     }, HUD_HIDE_DELAY_MS);
   }
 
+  // Auto-selects audio/subtitle tracks matching the user's language
+  // preferences (settings popover in the main window) once the track list
+  // is known. Leaves mpv's own choice alone whenever no preference is set
+  // or nothing matches, so this can only ever improve on the default.
+  function applyLanguagePreferences() {
+    const prefAudio = getPreferredAudio();
+    if (prefAudio) {
+      const match = audioTracks.find((t) => languageMatches(t.lang, prefAudio));
+      if (match && match.id !== selectedAudioId) {
+        selectedAudioId = match.id;
+        mpvSetAudioTrack(match.id).catch(() => {});
+      }
+    }
+    const prefSub = getPreferredSubtitle();
+    if (prefSub === "off") {
+      if (selectedSubtitleId !== null) {
+        selectedSubtitleId = null;
+        mpvSetSubtitleTrack(null).catch(() => {});
+      }
+    } else if (prefSub) {
+      const match = subtitleTracks.find((t) => languageMatches(t.lang, prefSub));
+      if (match && match.id !== selectedSubtitleId) {
+        selectedSubtitleId = match.id;
+        mpvSetSubtitleTrack(match.id).catch(() => {});
+      }
+    }
+  }
+
   async function loadTracks() {
     try {
       const tracks = await getTracks();
@@ -74,8 +151,25 @@
       subtitleTracks = tracks.filter((t) => t.type === "sub");
       selectedAudioId = audioTracks.find((t) => t.selected)?.id ?? null;
       selectedSubtitleId = subtitleTracks.find((t) => t.selected)?.id ?? null;
+      applyLanguagePreferences();
     } catch {
       // Track list isn't critical to playback; leave the selectors empty if it fails.
+    }
+  }
+
+  async function loadItemContext(itemId: string) {
+    // Segments are useful for movies too (some providers tag recaps or
+    // credits on films), so they're fetched regardless of type.
+    getSkipSegments(itemId).then((s) => (segments = s));
+    try {
+      currentItem = await getItem(itemId);
+    } catch {
+      return;
+    }
+    if (currentItem.Type === "Episode") {
+      getNextEpisode(itemId)
+        .then((next) => (nextEpisode = next))
+        .catch(() => (nextEpisode = null));
     }
   }
 
@@ -86,6 +180,7 @@
       const { name, value } = event.payload;
       if (name === "time-pos" && !seeking && typeof value === "number") timePos = value;
       if (name === "pause" && typeof value === "boolean") paused = value;
+      if (name === "eof-reached" && typeof value === "boolean") eofReached = value;
       if (name === "duration" && typeof value === "number") {
         duration = value;
         if (value > 0 && !tracksLoaded) {
@@ -99,27 +194,155 @@
       pipMode = event.payload;
     });
 
+    // Keys arrive from the main window -- this overlay is non-focusable and
+    // never receives keyboard input directly (see the main player page).
+    unlistenKeydown = await listen<{ key: string; shift: boolean }>("player://keydown", (event) => {
+      handleKey(event.payload.key, event.payload.shift);
+    });
+
+    // Restore last session's volume before the file starts making noise.
+    volume = loadStoredVolume();
+    mpvSetVolume(volume).catch(() => {});
+
     window.addEventListener("keydown", handleKeydown);
     resetHudTimer();
+    loadItemContext(page.params.id!);
   });
 
   onDestroy(() => {
     unlistenProperty?.();
     unlistenPip?.();
+    unlistenKeydown?.();
     window.removeEventListener("keydown", handleKeydown);
     if (hudTimer) clearTimeout(hudTimer);
+    stopCountdown();
   });
 
-  // A guaranteed-reliable way out of fullscreen that doesn't depend on the
-  // mouse at all.
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      if (activePanel !== "none") {
-        closePanel();
-      } else if (isFullscreen) {
-        toggleFullscreen();
+  // Shows the autoplay card when the credits start or the file ends, as
+  // long as there's something to play next and the user hasn't waved it
+  // off for this episode.
+  $effect(() => {
+    if (!nextEpisode || upNextDismissed || pipMode) return;
+    const due = inCredits || eofReached;
+    if (due && !upNextVisible) showUpNext();
+    // Seeking back out of the credits (to rewatch a scene, say) withdraws
+    // the card and its countdown; it comes back when the credits do.
+    if (!due && upNextVisible) {
+      stopCountdown();
+      upNextVisible = false;
+    }
+  });
+
+  function showUpNext() {
+    upNextVisible = true;
+    countdown = UP_NEXT_SECONDS;
+    hudVisible = true;
+    stopCountdown();
+    countdownTimer = setInterval(() => {
+      countdown -= 1;
+      if (countdown <= 0) {
+        stopCountdown();
+        playNext();
       }
-      return;
+    }, 1000);
+  }
+
+  function stopCountdown() {
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = undefined;
+  }
+
+  function dismissUpNext() {
+    stopCountdown();
+    upNextVisible = false;
+    upNextDismissed = true;
+    resetHudTimer();
+  }
+
+  function playNext() {
+    if (!nextEpisode || switching) return;
+    switching = true;
+    stopCountdown();
+    playItem(nextEpisode.Id).catch(() => (switching = false));
+  }
+
+  function skipSegment() {
+    if (!skippableSegment) return;
+    mpvSeek(skippableSegment.end).catch(() => {});
+    resetHudTimer();
+  }
+
+  function segmentLabel(segment: SkipSegment): string {
+    switch (segment.kind) {
+      case "Intro":
+        return "Skip Intro";
+      case "Recap":
+        return "Skip Recap";
+      case "Preview":
+        return "Skip Preview";
+      case "Commercial":
+        return "Skip Ad";
+      default:
+        return "Skip";
+    }
+  }
+
+  // Direct keydown on this window is normally unreachable (non-focusable),
+  // kept as a fallback for the main window's forwarded keys.
+  function handleKeydown(event: KeyboardEvent) {
+    handleKey(event.key, event.shiftKey);
+  }
+
+  function handleKey(key: string, shift: boolean) {
+    switch (key) {
+      case "Escape":
+        if (upNextVisible) dismissUpNext();
+        else if (activePanel !== "none") closePanel();
+        else if (isFullscreen) toggleFullscreen();
+        return;
+      case " ":
+      case "k":
+      case "K":
+        togglePause();
+        break;
+      case "ArrowLeft":
+      case "j":
+      case "J":
+        seekRelative(shift ? -60 : -SEEK_STEP_S);
+        break;
+      case "ArrowRight":
+      case "l":
+      case "L":
+        seekRelative(shift ? 60 : SEEK_STEP_S);
+        break;
+      case "ArrowUp":
+        setVolume(volume + VOLUME_STEP);
+        break;
+      case "ArrowDown":
+        setVolume(volume - VOLUME_STEP);
+        break;
+      case "m":
+      case "M":
+        toggleMute();
+        break;
+      case "f":
+      case "F":
+        toggleFullscreen();
+        return;
+      case "s":
+      case "S":
+        if (skippableSegment) skipSegment();
+        break;
+      case "n":
+      case "N":
+        if (nextEpisode) playNext();
+        break;
+      case "e":
+      case "E":
+        if (currentItem?.Type === "Episode") openPanel("episodes");
+        break;
+      default:
+        break;
     }
     resetHudTimer();
   }
@@ -136,7 +359,26 @@
   }
 
   function seekRelative(deltaSeconds: number) {
-    mpvSeek(Math.max(0, timePos + deltaSeconds)).catch(() => {});
+    const target = Math.max(0, Math.min(duration || Infinity, timePos + deltaSeconds));
+    timePos = target;
+    mpvSeek(target).catch(() => {});
+  }
+
+  function setVolume(next: number) {
+    volume = Math.max(0, Math.min(100, Math.round(next)));
+    if (volume > 0) volumeBeforeMute = 0;
+    mpvSetVolume(volume).catch(() => {});
+    storeVolume(volume);
+  }
+
+  function toggleMute() {
+    if (volume > 0) {
+      volumeBeforeMute = volume;
+      volume = 0;
+      mpvSetVolume(0).catch(() => {});
+    } else {
+      setVolume(volumeBeforeMute || 50);
+    }
   }
 
   // In PiP mode this window's own chrome is the only drag/resize handle the
@@ -205,8 +447,7 @@
   }
 
   function handleVolumeInput(event: Event) {
-    volume = Number((event.target as HTMLInputElement).value);
-    mpvSetVolume(volume).catch(() => {});
+    setVolume(Number((event.target as HTMLInputElement).value));
     resetHudTimer();
   }
 
@@ -257,14 +498,34 @@
     return `Track ${track.id}`;
   }
 
-  function openPanel(panel: "audio" | "captions") {
+  function openPanel(panel: "audio" | "captions" | "episodes") {
     activePanel = activePanel === panel ? "none" : panel;
+    if (activePanel === "episodes" && seasonEpisodes === null) loadSeasonEpisodes();
     resetHudTimer();
   }
 
   function closePanel() {
     activePanel = "none";
     resetHudTimer();
+  }
+
+  // Fetched lazily the first time the picker opens -- a season's episode
+  // list is only ever needed if the user actually reaches for it.
+  async function loadSeasonEpisodes() {
+    if (!currentItem?.SeriesId || !currentItem.SeasonId) return;
+    try {
+      seasonEpisodes = await getEpisodes(currentItem.SeriesId, currentItem.SeasonId);
+    } catch (e) {
+      episodesError = typeof e === "string" ? e : "Couldn't load episodes";
+      seasonEpisodes = [];
+    }
+  }
+
+  function chooseEpisode(id: string) {
+    if (id === currentItem?.Id || switching) return;
+    switching = true;
+    activePanel = "none";
+    playItem(id).catch(() => (switching = false));
   }
 
   function chooseAudio(id: number) {
@@ -348,9 +609,48 @@
     <button class="icon" onclick={handleBack} title="Back">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
     </button>
+    {#if currentItem}
+      <span class="now-playing">
+        {#if currentItem.Type === "Episode" && currentItem.SeriesName}
+          <span class="np-series">{currentItem.SeriesName}</span>
+          <span class="np-episode">{episodeCode(currentItem)} &middot; {currentItem.Name}</span>
+        {:else}
+          <span class="np-series">{currentItem.Name}</span>
+        {/if}
+      </span>
+    {/if}
   </div>
 
   <div class="spacer"></div>
+
+  <!-- Skip intro/recap and the autoplay-next card sit above the control bar
+       and stay visible even when the rest of the chrome has auto-hidden --
+       they're the whole point of looking at the screen at that moment. -->
+  <div class="overlays">
+    {#if skippableSegment && !upNextVisible}
+      <button class="skip" onclick={skipSegment}>
+        {segmentLabel(skippableSegment)}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 4l10 8-10 8z"></path><rect x="17" y="4" width="3" height="16" rx="1"></rect></svg>
+      </button>
+    {/if}
+
+    {#if upNextVisible && nextEpisode}
+      <div class="up-next">
+        <div class="up-next-label">Up next in {countdown}s</div>
+        <div class="up-next-title">
+          {episodeCode(nextEpisode)}{#if episodeCode(nextEpisode)}&nbsp;&middot;&nbsp;{/if}{nextEpisode.Name}
+        </div>
+        <div class="up-next-actions">
+          <button class="up-next-play" onclick={playNext}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l15 8-15 8z"></path></svg>
+            Play now
+          </button>
+          <button class="up-next-cancel" onclick={dismissUpNext}>Cancel</button>
+        </div>
+        <div class="up-next-track"><div class="up-next-fill" style={`width:${(1 - countdown / UP_NEXT_SECONDS) * 100}%`}></div></div>
+      </div>
+    {/if}
+  </div>
 
   <div class="controls chrome" class:hud-hidden={!hudVisible} role="toolbar" aria-label="Playback controls" tabindex="-1">
     <button class="icon" onclick={togglePause} title={paused ? "Play" : "Pause"}>
@@ -427,6 +727,41 @@
       </div>
     {/if}
 
+    {#if currentItem?.Type === "Episode"}
+      <div class="menu-anchor">
+        <button class="icon" onclick={() => openPanel("episodes")} title="Episodes (E)">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+        </button>
+        {#if activePanel === "episodes"}
+          <div class="menu episodes">
+            <div class="menu-label">
+              {currentItem.SeriesName ?? "Episodes"}{#if currentItem.ParentIndexNumber != null}&nbsp;&middot;&nbsp;Season {currentItem.ParentIndexNumber}{/if}
+            </div>
+            {#if seasonEpisodes === null}
+              <div class="menu-dim">Loading&hellip;</div>
+            {:else if episodesError}
+              <div class="menu-dim">{episodesError}</div>
+            {:else}
+              {#each seasonEpisodes as ep (ep.Id)}
+                <button class="menu-item episode" class:selected={ep.Id === currentItem.Id} onclick={() => chooseEpisode(ep.Id)}>
+                  <span class="ep-num">{ep.IndexNumber ?? ""}</span>
+                  <span class="ep-name">{ep.Name}</span>
+                  {#if ep.UserData?.Played}
+                    <svg class="ep-watched" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  {/if}
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
+      {#if nextEpisode}
+        <button class="icon" onclick={playNext} title={`Next: ${episodeCode(nextEpisode)} ${nextEpisode.Name} (N)`}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M5 4l10 8-10 8z"></path><rect x="17" y="4" width="3" height="16" rx="1"></rect></svg>
+        </button>
+      {/if}
+    {/if}
+
     <button class="icon" onclick={pip} title="Picture in picture">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1.5"></rect><rect x="12" y="12" width="7" height="5" rx="1" fill="currentColor" stroke="none"></rect></svg>
     </button>
@@ -448,6 +783,7 @@
   }
 
   .hud-root {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -595,6 +931,166 @@
   .menu-item.selected {
     color: var(--accent);
     font-weight: 600;
+  }
+
+  .menu-dim {
+    padding: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .menu.episodes {
+    min-width: 320px;
+    max-width: 420px;
+  }
+
+  .menu-item.episode {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .ep-num {
+    flex-shrink: 0;
+    min-width: 1.8em;
+    text-align: right;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .menu-item.selected .ep-num {
+    color: var(--accent);
+  }
+
+  .ep-name {
+    flex: 1;
+  }
+
+  .ep-watched {
+    flex-shrink: 0;
+    align-self: center;
+    color: var(--text-dim);
+  }
+
+  .now-playing {
+    display: flex;
+    flex-direction: column;
+    margin-left: 6px;
+    line-height: 1.25;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  }
+
+  .np-series {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .np-episode {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* Skip button + up-next card: bottom-right, just above the control bar. */
+  .overlays {
+    position: absolute;
+    right: 24px;
+    bottom: 76px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
+    z-index: 3;
+  }
+
+  .skip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #141018;
+    background: rgba(255, 255, 255, 0.92);
+    border: none;
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+
+  .skip:hover {
+    background: #fff;
+  }
+
+  .up-next {
+    position: relative;
+    overflow: hidden;
+    width: 320px;
+    padding: 14px 16px 18px;
+    background: rgba(24, 24, 28, 0.92);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+
+  .up-next-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+
+  .up-next-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .up-next-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .up-next-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #141018;
+    background: var(--text);
+    border: none;
+    border-radius: 6px;
+  }
+
+  .up-next-cancel {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+  }
+
+  .up-next-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .up-next-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 1s linear;
   }
 
   /* The compact overlay shown instead of the full HUD while this window is
